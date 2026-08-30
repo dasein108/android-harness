@@ -126,9 +126,6 @@ aa — Android agent harness control (Mac side, USB only)
   aa policy save|check       baseline the device config here, then detect drift
   aa settings termux-api|termux|apps|privacy|devopts
                              open the Android screen that owns these controls
-  aa grant camera|location   grant an Android runtime permission to Termux:API
-  aa grant storage           grant Termux "all files access" (MANAGE_EXTERNAL_STORAGE)
-                             (owner-authorized; prints what it changes)
 HELP
 }
 
@@ -448,34 +445,6 @@ cmd_netaudit() {
   return 0
 }
 
-cmd_grant() {
-  need adb; adb_one
-  aa_require_feature adb-grant "aa grant"
-  local what="${1:-}"
-  case "$what" in
-    camera)
-      echo "granting android.permission.CAMERA to com.termux.api"
-      adb shell pm grant com.termux.api android.permission.CAMERA || die "grant failed" ;;
-    location)
-      echo "granting ACCESS_COARSE_LOCATION + ACCESS_FINE_LOCATION to com.termux.api"
-      adb shell pm grant com.termux.api android.permission.ACCESS_COARSE_LOCATION || die "grant failed"
-      adb shell pm grant com.termux.api android.permission.ACCESS_FINE_LOCATION   || die "grant failed" ;;
-    storage)
-      # "All files access". Termux already reads shared storage through legacy
-      # storage (its targetSdk is 28); this adds other apps' directories under
-      # /Android/data and /Android/obb. It is a broad grant — hence explicit.
-      echo "granting MANAGE_EXTERNAL_STORAGE (all files access) to com.termux"
-      adb shell appops set --uid com.termux MANAGE_EXTERNAL_STORAGE allow || die "appops set failed"
-      adb shell appops get com.termux MANAGE_EXTERNAL_STORAGE ;;
-    *) die "usage: aa grant camera|location|storage" ;;
-  esac
-  case "$what" in
-    storage) echo "done. Revoke with: adb shell appops set --uid com.termux MANAGE_EXTERNAL_STORAGE default" ;;
-    *)       echo "done. Revoke with: adb shell pm revoke com.termux.api <permission>" ;;
-  esac
-}
-
-# ---------------------------------------------------------------------------
 cmd_server() {
   local sub="${1:-status}"
   ensure_forward
@@ -576,7 +545,6 @@ main() {
     permissions|perms) cmd_permissions "$@" ;;
     policy)    cmd_policy "$@" ;;
     settings)  cmd_settings "$@" ;;
-    grant)     cmd_grant "$@" ;;
     report)    cmd_report "$@" ;;   # exits non-zero if any section failed
     *) die "unknown command '$cmd' (aa help)" ;;
   esac

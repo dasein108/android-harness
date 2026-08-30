@@ -1,13 +1,14 @@
 #!/data/data/com.termux/files/usr/bin/env bash
 # Hold or release a Termux wake lock so long agent jobs survive doze.
 #
-# This is deliberately explicit and non-persistent: nothing here re-acquires a
-# lock at boot, and `status` tells you exactly what is held.
+# Explicit and non-persistent: nothing re-acquires a lock at boot. There is no
+# `status` — an app uid cannot read /sys/power/wake_lock, so it could only ever
+# have guessed.
 set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
 
-case "${1:-status}" in
-  -h|--help) echo "usage: android-wake on|off|status"; exit 0 ;;
+case "${1:-}" in
+  -h|--help) echo "usage: android-wake on|off"; exit 0 ;;
   on)
     aa_require_api termux-wake-lock
     termux-wake-lock || aa_die "$AA_EXIT_RUNTIME" "termux-wake-lock failed"
@@ -18,13 +19,5 @@ case "${1:-status}" in
     termux-wake-unlock || aa_die "$AA_EXIT_RUNTIME" "termux-wake-unlock failed"
     aa_log wake "wake lock released"
     echo "wake-lock: released" ;;
-  status)
-    # Termux exposes the lock through its notification; the sysfs view is the
-    # closest thing to a machine-readable answer that a non-root app can read.
-    if grep -qs 'TermuxWakeLock' /sys/power/wake_lock 2>/dev/null; then
-      echo "wake-lock: held"
-    else
-      echo "wake-lock: unknown-or-released (not readable without root on this device)"
-    fi ;;
-  *) aa_usage "android-wake on|off|status" ;;
+  *) aa_usage "android-wake on|off" ;;
 esac

@@ -7,7 +7,6 @@
 #
 #   e2e.sh            run everything that does not disturb the user
 #   e2e.sh --full     also exercise camera, notification, vibration, clipboard
-#   e2e.sh --json     machine-readable summary on stdout
 
 set -uo pipefail
 
@@ -20,31 +19,27 @@ AA_ROOT="${AA_ROOT:-$HOME/android-agent}"
 export PATH="$AA_ROOT/bin:$PATH"
 
 FULL=0
-JSON=0
 for a in "$@"; do
   case "$a" in
     --full) FULL=1 ;;
-    --json) JSON=1 ;;
     -h|--help) usage_from_header; exit 0 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac
 done
 
 PASS=0; FAIL=0; SKIP=0
-RESULTS=""
 
 record() { # record <status> <name> <detail>
-  RESULTS="$RESULTS$1|$2|$3"$'\n'
   case "$1" in
     PASS) PASS=$((PASS+1)) ;;
     FAIL) FAIL=$((FAIL+1)) ;;
     SKIP) SKIP=$((SKIP+1)) ;;
   esac
-  [ "$JSON" -eq 1 ] || printf '%-5s %-24s %s\n' "$1" "$2" "$3"
+  printf '%-5s %-24s %s\n' "$1" "$2" "$3"
 }
 
-[ "$JSON" -eq 1 ] || echo "android-agent end-to-end tests ($(date))"
-[ "$JSON" -eq 1 ] || echo "-------------------------------------------------------------"
+echo "android-agent end-to-end tests ($(date))"
+echo "-------------------------------------------------------------"
 
 # --- shell ------------------------------------------------------------------
 if [ "$(sh -c 'echo hello')" = hello ]; then record PASS shell "echo hello"
@@ -255,32 +250,17 @@ else
   record FAIL sshd-config "sshd_config does not pin loopback + pubkey-only"
 fi
 
-[ "$JSON" -eq 1 ] || {
-  echo "-------------------------------------------------------------"
-  if [ -z "$ADDRS" ]; then
-    echo "listening sockets: not visible to this uid (Android blocks /proc/net"
-    echo "                   and the netlink socket ss needs). Run 'aa netaudit'"
-    echo "                   on the host for the authoritative table."
-  else
-    echo "listening sockets:"
-    printf '%s\n' "$LISTEN" | sed 's/^/  /'
-  fi
-  echo "-------------------------------------------------------------"
-  printf 'PASS=%d FAIL=%d SKIP=%d\n' "$PASS" "$FAIL" "$SKIP"
-  [ "$FAIL" -eq 0 ] && echo "E2E_RESULT=OK" || echo "E2E_RESULT=FAIL"
-}
-
-if [ "$JSON" -eq 1 ]; then
-  printf '{\n  "pass": %d, "fail": %d, "skip": %d,\n  "tests": [\n' "$PASS" "$FAIL" "$SKIP"
-  first=1
-  printf '%s' "$RESULTS" | while IFS='|' read -r st nm dt; do
-    [ -n "$st" ] || continue
-    [ $first -eq 1 ] || printf ',\n'
-    first=0
-    printf '    {"status": "%s", "name": "%s", "detail": "%s"}' \
-      "$st" "$nm" "$(printf '%s' "$dt" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  done
-  printf '\n  ]\n}\n'
+echo "-------------------------------------------------------------"
+if [ -z "$ADDRS" ]; then
+  echo "listening sockets: not visible to this uid (Android blocks /proc/net"
+  echo "                   and the netlink socket ss needs). Run 'aa netaudit'"
+  echo "                   on a host for the authoritative table."
+else
+  echo "listening sockets:"
+  printf '%s\n' "$LISTEN" | sed 's/^/  /'
 fi
+echo "-------------------------------------------------------------"
+printf 'PASS=%d FAIL=%d SKIP=%d\n' "$PASS" "$FAIL" "$SKIP"
+[ "$FAIL" -eq 0 ] && echo "E2E_RESULT=OK" || echo "E2E_RESULT=FAIL"
 
 [ "$FAIL" -eq 0 ]

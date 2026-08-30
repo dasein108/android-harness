@@ -64,7 +64,7 @@ android-volume [STREAM LEVEL]       no args prints all streams
 android-brightness 0-255|auto
 android-open FILE|URL               hand off to the default Android handler
 android-share [-t TITLE] FILE       Android share sheet
-android-wake on|off|status          wake lock for long jobs
+android-wake on|off                 wake lock for long jobs
 android-screenshot                  NOT available on-device — see UI automation
 ```
 
@@ -74,7 +74,7 @@ Agent management:
 android-agent-status [--json]       full diagnostic report
 android-agent-manifest [--refresh]  capability manifest (only verified caps)
 android-agent-server start|stop|restart|status|logs|config
-~/android-agent/tests/e2e.sh [--full] [--json]
+~/android-agent/tests/e2e.sh [--full]
 ~/android-agent/security/audit.sh
 ```
 

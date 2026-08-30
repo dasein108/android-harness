@@ -95,8 +95,7 @@ followed by the specific failures. A failure never gets reported as success.
 Camera and location are runtime permissions on Termux:API and start denied:
 
 ```bash
-./mac/aa grant camera
-./mac/aa grant location
+./mac/aa permissions --grant camera,location
 ./mac/aa shell 'android-agent-manifest --refresh'
 ```
 
@@ -132,8 +131,8 @@ unavailable report `SKIP` with the reason.
 |---|---|
 | `python` / `node` FAIL | `./mac/aa provision` again; read `~/android-agent/logs/install.log` |
 | every `termux-*` SKIPs | Termux:API app missing, or battery optimisation is killing it |
-| `camera` SKIP | `./mac/aa grant camera`, then `./mac/aa ui launch com.termux` — Android blocks the camera for background apps |
-| `location` SKIP | `./mac/aa grant location`, and the phone needs a last-known fix |
+| `camera` SKIP | `./mac/aa permissions --grant camera`, then `./mac/aa ui launch com.termux` — Android blocks the camera for background apps |
+| `location` SKIP | `./mac/aa permissions --grant location`, and the phone needs a last-known fix |
 | `shared-storage` SKIP | `./mac/aa shell termux-setup-storage`, then approve on the phone |
 | `claude-version` FAIL | see `docs/CLAUDE-CODE.md` — check `file` on the resolved binary |
 | `sshd` FAIL | `./mac/aa server start`; if it refuses, the config no longer binds loopback |

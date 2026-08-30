@@ -205,9 +205,6 @@ esac
 # under bionic. Use the Termux-native one from \`pkg install ripgrep\`.
 export USE_BUILTIN_RIPGREP=0
 
-# Keep agent scratch inside the agent tree rather than the shared \$TMPDIR.
-export AA_TMPDIR="\$AA_ROOT/tmp"
-
 [ -f "\$AA_ROOT/config/environment.local" ] && . "\$AA_ROOT/config/environment.local"
 ENVEOF
 chmod 600 "$ENV_FILE"
@@ -347,7 +344,7 @@ else
       [ "$NATIVE_VERSION" = latest ] || SPEC_NATIVE="$NATIVE_PKG@$NATIVE_VERSION"
       say "   fetching native build $SPEC_NATIVE from the npm registry (~200 MB)"
 
-      if ( cd "$AA_TMPDIR" 2>/dev/null || cd "$AA_ROOT/tmp"; \
+      if ( cd "$AA_ROOT/tmp"; \
            rm -f ./*.tgz; \
            npm pack "$SPEC_NATIVE" >/dev/null 2>>"$AA_ROOT/logs/install.log" && \
            tar xzf ./*.tgz -C "$TOOLDIR" --strip-components=1 package/claude ) \

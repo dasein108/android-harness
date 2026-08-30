@@ -14,7 +14,6 @@
 #   --with-server    also configure the loopback SSH channel, for a computer
 #                    to connect over USB later. Off by default: with no computer
 #                    in the picture there is nothing to connect.
-#   --branch NAME    install from a branch other than main
 #   --dir PATH       where to keep the checkout (default ~/android-harness-src)
 
 set -uo pipefail
@@ -25,7 +24,6 @@ usage_from_header() { sed -n '2,/^[^#]/p' "$0" | sed -e 's/^# //' -e 's/^#$//'; 
 REPO_URL="https://github.com/dasein108/android-harness.git"
 TARBALL_URL="https://codeload.github.com/dasein108/android-harness/tar.gz"
 SRC_DIR="$HOME/android-harness-src"
-BRANCH="main"
 PROVISION_ARGS="--shortcuts --phone-only"
 
 while [ $# -gt 0 ]; do
@@ -33,7 +31,6 @@ while [ $# -gt 0 ]; do
     --media)       PROVISION_ARGS="$PROVISION_ARGS --media"; shift ;;
     --no-claude)   PROVISION_ARGS="$PROVISION_ARGS --no-claude"; shift ;;
     --with-server) PROVISION_ARGS="${PROVISION_ARGS/--phone-only/}"; shift ;;
-    --branch)      BRANCH="${2:?--branch needs a name}"; shift 2 ;;
     --dir)         SRC_DIR="${2:?--dir needs a path}"; shift 2 ;;
     -h|--help)     usage_from_header; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -91,18 +88,17 @@ fi
 
 if [ -d "$SRC_DIR/.git" ]; then
   grn "updating $SRC_DIR"
-  git -C "$SRC_DIR" fetch --quiet origin "$BRANCH" && \
-  git -C "$SRC_DIR" reset --quiet --hard "origin/$BRANCH" || \
+  git -C "$SRC_DIR" pull --quiet --ff-only || \
     red "update failed; continuing with what is on disk"
 elif [ -d "$SRC_DIR" ]; then
   grn "using $SRC_DIR"
 else
   bold "cloning $REPO_URL"
-  if ! git clone --quiet --branch "$BRANCH" --depth 1 "$REPO_URL" "$SRC_DIR"; then
+  if ! git clone --quiet --depth 1 "$REPO_URL" "$SRC_DIR"; then
     # Fall back to a tarball, which needs no git and works on flaky links.
     dim "git clone failed; trying the tarball"
     mkdir -p "$SRC_DIR"
-    curl -fL "$TARBALL_URL/$BRANCH" -o "$HOME/.aa-src.tar.gz" || die "download failed"
+    curl -fL "$TARBALL_URL/main" -o "$HOME/.aa-src.tar.gz" || die "download failed"
     tar xzf "$HOME/.aa-src.tar.gz" -C "$SRC_DIR" --strip-components=1 || die "extract failed"
     rm -f "$HOME/.aa-src.tar.gz"
   fi

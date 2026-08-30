@@ -23,7 +23,6 @@ usage_from_header() { sed -n '2,/^[^#]/p' "$0" | sed -e 's/^# //' -e 's/^#$//'; 
 
 REPO_URL="https://github.com/dasein108/android-harness.git"
 TARGET_DIR="${AA_DIR:-$HOME/android-harness}"
-BRANCH="main"
 PROFILE="default"
 PROVISION_ARGS="--shortcuts"
 ASSUME_YES=0
@@ -32,7 +31,6 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --profile) PROFILE="${2:?--profile needs a name}"; shift 2 ;;
     --dir)     TARGET_DIR="${2:?--dir needs a path}"; shift 2 ;;
-    --branch)  BRANCH="${2:?--branch needs a name}"; shift 2 ;;
     --media)   PROVISION_ARGS="$PROVISION_ARGS --media"; shift ;;
     --no-claude) PROVISION_ARGS="$PROVISION_ARGS --no-claude"; shift ;;
     --no-shortcuts) PROVISION_ARGS="${PROVISION_ARGS/--shortcuts/}"; shift ;;
@@ -99,7 +97,7 @@ elif [ -x "$TARGET_DIR/mac/aa" ]; then
   fi
 else
   bold "cloning $REPO_URL -> $TARGET_DIR"
-  git clone --branch "$BRANCH" "$REPO_URL" "$TARGET_DIR" || die "clone failed"
+  git clone "$REPO_URL" "$TARGET_DIR" || die "clone failed"
 fi
 
 AA="$TARGET_DIR/mac/aa"

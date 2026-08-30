@@ -1,0 +1,13 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Wi-Fi state as JSON. `--scan` lists visible networks (needs location permission).
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+case "${1:-}" in
+  -h|--help) echo "usage: android-wifi [--scan]"; exit 0 ;;
+  --scan)    out="$(aa_run_api termux-wifi-scaninfo)" || exit $? ;;
+  "")        out="$(aa_run_api termux-wifi-connectioninfo)" || exit $? ;;
+  *)         aa_usage "android-wifi [--scan]" ;;
+esac
+
+printf '%s\n' "$out"

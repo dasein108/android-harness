@@ -1,0 +1,164 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Machine-readable capability manifest.
+#
+#   android-agent-manifest            print the stored manifest
+#   android-agent-manifest --refresh  re-probe every capability and rewrite it
+#
+# Capabilities are advertised only when a functional probe succeeds. A missing
+# permission or a missing Termux:API app shows up as absent, never as present.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+MANIFEST="$AA_CONFIG/manifest.json"
+VERSION="1.0.0"
+
+case "${1:-}" in
+  -h|--help) echo "usage: android-agent-manifest [--refresh]"; exit 0 ;;
+  "")
+    [ -f "$MANIFEST" ] || aa_die "$AA_EXIT_UNAVAILABLE" "no manifest at $MANIFEST (run: android-agent-manifest --refresh)"
+    cat "$MANIFEST"; exit 0 ;;
+  --refresh) ;;
+  *) aa_usage "android-agent-manifest [--refresh]" ;;
+esac
+
+mkdir -p "$AA_CONFIG" "$AA_TMP"
+
+CAPS=""
+NOTES=""
+add_cap()  { CAPS="$CAPS $1"; }
+add_note() { NOTES="$NOTES|$1: $2"; }
+
+probe() { # probe <name> <description-on-failure> <command...>
+  local name="$1" why="$2"; shift 2
+  if "$@" >/dev/null 2>&1; then add_cap "$name"; return 0; fi
+  add_note "$name" "$why"
+  return 1
+}
+
+# --- core ------------------------------------------------------------------
+probe shell "sh missing" sh -c 'echo ok'
+
+t="$AA_TMP/.manifest-probe.$$"
+if ( echo probe > "$t" && [ "$(cat "$t")" = probe ] && rm -f "$t" ) 2>/dev/null; then
+  add_cap filesystem
+else
+  add_note filesystem "cannot write inside $AA_TMP"
+fi
+
+s="$HOME/storage/shared/.android-agent-probe"
+if ( echo probe > "$s" && [ "$(cat "$s")" = probe ] && rm -f "$s" ) 2>/dev/null; then
+  add_cap shared-storage
+else
+  add_note shared-storage "no write access to \$HOME/storage/shared (run termux-setup-storage and grant storage)"
+fi
+
+probe python "python not runnable"       python -c 'print("ok")'
+probe pip    "pip not runnable"          python -m pip --version
+probe venv   "venv module missing"       python -m venv --help
+probe node   "node not runnable"         node -e 'process.exit(0)'
+probe npm    "npm not runnable"          npm --version
+probe claude "claude not runnable (see docs/CLAUDE-CODE.md)" claude --version
+probe git    "git not installed"         git --version
+
+# --- android bridge --------------------------------------------------------
+if aa_have termux-battery-status; then
+  add_cap termux-api-helpers
+  if AA_API_TIMEOUT=8 termux-battery-status >/dev/null 2>&1; then
+    add_cap battery
+  else
+    add_note battery "Termux:API app not responding"
+  fi
+else
+  add_note termux-api-helpers "pkg install termux-api"
+fi
+
+if aa_have termux-wifi-connectioninfo && AA_API_TIMEOUT=8 timeout 8 termux-wifi-connectioninfo >/dev/null 2>&1; then
+  add_cap wifi
+else
+  add_note wifi "wifi info unavailable"
+fi
+
+if aa_have termux-clipboard-get && AA_API_TIMEOUT=8 timeout 8 termux-clipboard-get >/dev/null 2>&1; then
+  add_cap clipboard
+else
+  add_note clipboard "clipboard bridge unavailable"
+fi
+
+if aa_have termux-notification; then add_cap notifications; else add_note notifications "termux-api missing"; fi
+if aa_have termux-vibrate;      then add_cap vibrate;       else add_note vibrate "termux-api missing"; fi
+if aa_have termux-share;        then add_cap share;         else add_note share "termux-api missing"; fi
+if aa_have termux-volume;       then add_cap volume;        else add_note volume "termux-api missing"; fi
+if aa_have termux-brightness;   then add_cap brightness;    else add_note brightness "termux-api missing"; fi
+if aa_have termux-open;         then add_cap open;          else add_note open "termux-api missing"; fi
+if aa_have termux-wake-lock;    then add_cap wake-lock;     else add_note wake-lock "termux-api missing"; fi
+
+# Camera. `termux-camera-info` answers even when the CAMERA permission is
+# denied, so it proves nothing; the only real proof is a capture. That is mildly
+# intrusive (shutter, flash), so it is done at most once and the result cached —
+# later refreshes trust the marker instead of taking another photo.
+CAM_MARK="$AA_CONFIG/camera-verified"
+if ! aa_have termux-camera-photo; then
+  add_note camera "termux-api missing"
+elif [ -f "$CAM_MARK" ]; then
+  add_cap camera
+else
+  CAM_TMP="$AA_TMP/.camera-probe.$$.jpg"
+  if timeout 25 termux-camera-photo -c 0 "$CAM_TMP" >/dev/null 2>&1 && [ -s "$CAM_TMP" ]; then
+    date -u '+%Y-%m-%dT%H:%M:%SZ' > "$CAM_MARK"
+    add_cap camera
+  else
+    add_note camera "capture failed — needs the CAMERA permission (host: aa grant camera) and Termux in the foreground (host: aa ui launch com.termux)"
+  fi
+  rm -f "$CAM_TMP"
+fi
+
+# Location: last-known fix is cheap; a live GPS fix is not, so we do not force one.
+if aa_have termux-location && timeout 15 termux-location -p network -r last >/dev/null 2>&1; then
+  add_cap location
+else
+  add_note location "location permission not granted to Termux:API, or no last-known fix"
+fi
+
+# Screen capture and UI automation are host-side capabilities on an unrooted
+# device. They are recorded as such rather than claimed here.
+add_note screenshot "host-side only: aa ui screenshot (adb exec-out screencap)"
+add_note ui-automation "host-side only: aa ui tap/text/key/dump (adb input + uiautomator)"
+
+# --- emit ------------------------------------------------------------------
+caps_json=""
+for c in $CAPS; do
+  [ -n "$caps_json" ] && caps_json="$caps_json,"
+  caps_json="$caps_json\n    \"$c\""
+done
+
+notes_json=""
+IFS='|'
+for n in $NOTES; do
+  [ -n "$n" ] || continue
+  key="${n%%: *}"; val="${n#*: }"
+  [ -n "$notes_json" ] && notes_json="$notes_json,"
+  notes_json="$notes_json\n    \"$(aa_json_escape "$key")\": \"$(aa_json_escape "$val")\""
+done
+unset IFS
+
+tmpfile="$MANIFEST.tmp.$$"
+{
+  printf '{\n'
+  printf '  "name": "android-agent",\n'
+  printf '  "version": "%s",\n' "$VERSION"
+  printf '  "platform": "android-termux",\n'
+  printf '  "generated": "%s",\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf '  "device": { "model": "%s", "android": "%s", "arch": "%s" },\n' \
+    "$(aa_json_escape "$(getprop ro.product.model 2>/dev/null)")" \
+    "$(aa_json_escape "$(getprop ro.build.version.release 2>/dev/null)")" \
+    "$(aa_json_escape "$(uname -m)")"
+  printf '  "agent_root": "%s",\n' "$(aa_json_escape "$AA_ROOT")"
+  printf '  "control_channel": { "type": "ssh", "bind": "127.0.0.1", "port": 8022, "transport": "adb-forward-over-usb", "auth": "ssh-publickey" },\n'
+  printf '  "capabilities": [%b\n  ],\n' "$caps_json"
+  printf '  "unavailable": {%b\n  }\n' "$notes_json"
+  printf '}\n'
+} > "$tmpfile"
+
+mv "$tmpfile" "$MANIFEST"
+chmod 600 "$MANIFEST"
+cat "$MANIFEST"

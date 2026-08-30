@@ -1,0 +1,20 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Set screen brightness (0-255, or `auto`).
+#
+# Note: this needs WRITE_SETTINGS for Termux:API. If Android refuses, grant
+# "Modify system settings" to Termux:API and retry — we do not try to work
+# around the permission.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+level="${1:-}"
+case "$level" in
+  -h|--help) echo "usage: android-brightness 0-255|auto"; exit 0 ;;
+  "")   aa_usage "android-brightness 0-255|auto" ;;
+  auto) ;;
+  *[!0-9]*) aa_usage "android-brightness 0-255|auto" ;;
+  *) [ "$level" -le 255 ] || aa_usage "brightness must be 0-255 or 'auto'" ;;
+esac
+
+aa_run_api termux-brightness "$level" >/dev/null || exit $?
+aa_log brightness "set $level"

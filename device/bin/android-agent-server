@@ -1,0 +1,82 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Control the agent's local SSH channel.
+#
+# The "server" is plain OpenSSH bound to 127.0.0.1:8022. It is reachable only
+# from the device itself, which in practice means: from the Mac through
+# `adb forward` over USB. There is no other control listener, no relay, and no
+# outbound tunnel.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+SSHD_CONF="$PREFIX/etc/ssh/sshd_config"
+SSHD_LOG="$AA_LOGS/sshd.log"
+PORT=8022
+
+mkdir -p "$AA_LOGS"
+
+pid_of_sshd() { pgrep -x sshd 2>/dev/null | head -1; }
+
+check_binding() {
+  # Refuse to run with a config that would expose the channel beyond loopback.
+  local listen
+  listen="$(grep -iE '^[[:space:]]*ListenAddress' "$SSHD_CONF" 2>/dev/null | awk '{print $2}')"
+  if [ -z "$listen" ]; then
+    aa_err "refusing to start: no ListenAddress in $SSHD_CONF (sshd would bind all interfaces)."
+    return 1
+  fi
+  for a in $listen; do
+    case "$a" in
+      127.0.0.1|::1|localhost) ;;
+      *) aa_err "refusing to start: ListenAddress '$a' is not loopback."; return 1 ;;
+    esac
+  done
+  if grep -qiE '^[[:space:]]*PasswordAuthentication[[:space:]]+yes' "$SSHD_CONF" 2>/dev/null; then
+    aa_err "refusing to start: PasswordAuthentication is enabled; this channel is pubkey-only."
+    return 1
+  fi
+  return 0
+}
+
+case "${1:-status}" in
+  -h|--help) echo "usage: android-agent-server start|stop|restart|status|logs|config"; exit 0 ;;
+
+  start)
+    if [ -n "$(pid_of_sshd)" ]; then echo "sshd already running (pid $(pid_of_sshd))"; exit 0; fi
+    check_binding || exit "$AA_EXIT_RUNTIME"
+    sshd -E "$SSHD_LOG" || aa_die "$AA_EXIT_RUNTIME" "sshd failed to start (see $SSHD_LOG)"
+    sleep 1
+    [ -n "$(pid_of_sshd)" ] || aa_die "$AA_EXIT_RUNTIME" "sshd exited immediately (see $SSHD_LOG)"
+    aa_log server "sshd started on 127.0.0.1:$PORT"
+    echo "sshd started (pid $(pid_of_sshd)) on 127.0.0.1:$PORT" ;;
+
+  stop)
+    p="$(pid_of_sshd)"
+    if [ -z "$p" ]; then echo "sshd not running"; exit 0; fi
+    pkill -x sshd || aa_die "$AA_EXIT_RUNTIME" "failed to stop sshd"
+    aa_log server "sshd stopped"
+    echo "sshd stopped" ;;
+
+  restart)
+    "$0" stop >/dev/null
+    sleep 1
+    exec "$0" start ;;
+
+  status)
+    p="$(pid_of_sshd)"
+    if [ -n "$p" ]; then echo "sshd: running (pid $p)"; else echo "sshd: stopped"; fi
+    echo "config: $SSHD_CONF"
+    grep -iE '^[[:space:]]*(ListenAddress|Port|PasswordAuthentication|PubkeyAuthentication)' "$SSHD_CONF" 2>/dev/null | sed 's/^/  /'
+    echo "listeners:"
+    { (command -v ss >/dev/null 2>&1 && ss -lntu 2>/dev/null | tail -n +2) \
+      || netstat -lntu 2>/dev/null | tail -n +3 ; } | sed 's/^/  /'
+    [ -n "$p" ] || exit 1 ;;
+
+  logs)
+    [ -f "$SSHD_LOG" ] || { echo "no log at $SSHD_LOG"; exit 0; }
+    tail -n "${2:-50}" "$SSHD_LOG" ;;
+
+  config)
+    sed -n '/# >>> android-harness >>>/,/# <<< android-harness <<</p' "$SSHD_CONF" ;;
+
+  *) aa_usage "android-agent-server start|stop|restart|status|logs|config" ;;
+esac

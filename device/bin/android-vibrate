@@ -1,0 +1,20 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Vibrate the device. Duration in milliseconds (default 300).
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+ms=300
+force=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) echo "usage: android-vibrate [MILLISECONDS] [--force]  (--force vibrates even in silent mode)"; exit 0 ;;
+    --force) force=1; shift ;;
+    ''|*[!0-9]*) aa_usage "android-vibrate [MILLISECONDS] [--force]" ;;
+    *) ms="$1"; shift ;;
+  esac
+done
+
+set -- -d "$ms"
+[ "$force" -eq 1 ] && set -- "$@" -f
+
+aa_run_api termux-vibrate "$@" >/dev/null || exit $?

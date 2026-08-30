@@ -1,0 +1,27 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Post an Android notification.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+title="android-agent"
+id=""
+prio="default"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) echo "usage: android-notify [-t TITLE] [-i ID] [-p min|low|default|high|max] CONTENT..."; exit 0 ;;
+    -t) title="${2:-}"; shift 2 || aa_usage "android-notify -t <title>" ;;
+    -i) id="${2:-}";    shift 2 || aa_usage "android-notify -i <id>" ;;
+    -p) prio="${2:-}";  shift 2 || aa_usage "android-notify -p <priority>" ;;
+    *) break ;;
+  esac
+done
+
+content="$*"
+[ -n "$content" ] || aa_usage "android-notify [-t TITLE] CONTENT..."
+
+set -- -t "$title" -c "$content" --priority "$prio"
+[ -n "$id" ] && set -- "$@" -i "$id"
+
+aa_run_api termux-notification "$@" >/dev/null || exit $?
+aa_log notify "posted notification: $title"

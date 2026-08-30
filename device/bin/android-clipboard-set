@@ -1,0 +1,19 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Write the Android clipboard. Text comes from arguments, or stdin when absent.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+case "${1:-}" in
+  -h|--help) echo "usage: android-clipboard-set TEXT... | echo TEXT | android-clipboard-set"; exit 0 ;;
+esac
+
+if [ $# -gt 0 ]; then
+  text="$*"
+else
+  text="$(cat)"
+fi
+[ -n "$text" ] || aa_usage "android-clipboard-set TEXT..."
+
+printf '%s' "$text" | aa_run_api termux-clipboard-set >/dev/null || exit $?
+# Log the fact, never the value.
+aa_log clipboard "set ${#text} bytes"

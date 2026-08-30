@@ -1,0 +1,20 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Read or set stream volumes. No arguments prints all streams as JSON.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+case "${1:-}" in
+  -h|--help) echo "usage: android-volume [STREAM LEVEL]   streams: alarm music notification ring system call"; exit 0 ;;
+esac
+
+if [ $# -eq 0 ]; then
+  aa_run_api termux-volume || exit $?
+  echo
+  exit 0
+fi
+
+[ $# -eq 2 ] || aa_usage "android-volume STREAM LEVEL"
+case "$2" in ''|*[!0-9]*) aa_usage "android-volume STREAM LEVEL (LEVEL must be an integer)" ;; esac
+
+aa_run_api termux-volume "$1" "$2" >/dev/null || exit $?
+aa_log volume "set $1 -> $2"

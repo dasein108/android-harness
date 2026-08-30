@@ -1,0 +1,14 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Read the Android clipboard.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+case "${1:-}" in
+  -h|--help) echo "usage: android-clipboard-get"; exit 0 ;;
+esac
+
+out="$(aa_run_api termux-clipboard-get)" || exit $?
+# The clipboard is a common resting place for credentials; never let it reach a
+# log file, and refuse to echo obvious private-key material.
+aa_secret_guard "$out" || exit "$AA_EXIT_RUNTIME"
+printf '%s\n' "$out"

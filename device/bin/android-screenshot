@@ -1,0 +1,32 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Screen capture.
+#
+# Honest capability note: an unrooted Android device gives Termux no way to
+# capture the screen. `screencap` lives in the shell/system domain, and
+# Termux:API exposes no MediaProjection bridge. So this command is a stub that
+# fails loudly with the working alternative rather than pretending.
+#
+# The real implementation lives on the Mac side: `aa ui screenshot`, which uses
+# `adb exec-out screencap -p` over the USB channel.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+case "${1:-}" in
+  -h|--help) echo "usage: android-screenshot [OUTPUT.png]   (host-side only; see message)"; exit 0 ;;
+esac
+
+if command -v screencap >/dev/null 2>&1; then
+  out="${1:-$AA_ROOT/output/screen-$(date '+%Y%m%d-%H%M%S').png}"
+  mkdir -p "$(dirname "$out")"
+  if screencap -p "$out" 2>/dev/null && [ -s "$out" ]; then
+    printf '%s\n' "$out"
+    exit 0
+  fi
+  rm -f "$out"
+fi
+
+aa_err "error: screen capture is not available from inside Termux on an unrooted device."
+aa_err "hint:  run it from the Mac over the USB channel instead:"
+aa_err "         aa ui screenshot [OUTPUT.png]"
+aa_err "       (equivalently: adb exec-out screencap -p > shot.png)"
+exit "$AA_EXIT_UNAVAILABLE"

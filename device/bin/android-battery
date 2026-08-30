@@ -1,0 +1,21 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Battery status as JSON (machine-readable passthrough from Termux:API).
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+case "${1:-}" in
+  -h|--help) echo "usage: android-battery [--percent]"; exit 0 ;;
+esac
+
+out="$(aa_run_api termux-battery-status)" || exit $?
+
+if [ "${1:-}" = "--percent" ]; then
+  if aa_have jq; then
+    printf '%s\n' "$out" | jq -r '.percentage'
+  else
+    printf '%s\n' "$out" | sed -n 's/.*"percentage"[: ]*\([0-9]*\).*/\1/p'
+  fi
+  exit 0
+fi
+
+printf '%s\n' "$out"

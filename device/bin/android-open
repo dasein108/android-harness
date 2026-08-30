@@ -1,0 +1,23 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Hand a file or URL to Android's default handler.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+target="${1:-}"
+case "$target" in
+  -h|--help) echo "usage: android-open FILE|URL"; exit 0 ;;
+  "")        aa_usage "android-open FILE|URL" ;;
+esac
+
+case "$target" in
+  http://*|https://*)
+    aa_require_api termux-open-url
+    termux-open-url "$target" || aa_die "$AA_EXIT_RUNTIME" "termux-open-url failed for $target"
+    ;;
+  *)
+    [ -e "$target" ] || aa_die "$AA_EXIT_USAGE" "no such file: $target"
+    aa_require_api termux-open
+    termux-open "$target" || aa_die "$AA_EXIT_RUNTIME" "termux-open failed for $target"
+    ;;
+esac
+aa_log open "opened $target"

@@ -1,0 +1,28 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Device location as JSON. Requires the location permission on Termux:API.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+provider=gps
+request=once
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) echo "usage: android-location [-p gps|network|passive] [-r once|last|updates]"; exit 0 ;;
+    -p) provider="${2:-}"; shift 2 || aa_usage "android-location -p <provider>" ;;
+    -r) request="${2:-}";  shift 2 || aa_usage "android-location -r <request>" ;;
+    *)  aa_usage "android-location [-p provider] [-r request]" ;;
+  esac
+done
+
+# GPS can take a while outdoors and forever indoors; keep the timeout generous
+# but bounded so the agent is never wedged.
+AA_API_TIMEOUT="${AA_API_TIMEOUT:-45}"
+out="$(aa_run_api termux-location -p "$provider" -r "$request")" || exit $?
+
+if [ -z "${out//[[:space:]]/}" ]; then
+  aa_err "error: no location fix from provider '$provider'."
+  aa_err "hint:  try -p network, or -r last for the last known fix."
+  exit "$AA_EXIT_RUNTIME"
+fi
+printf '%s\n' "$out"

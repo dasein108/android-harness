@@ -1,0 +1,29 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Share a file (or stdin) through the Android share sheet.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+title="android-agent"
+action="view"     # view | edit | send
+mime=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) echo "usage: android-share [-t TITLE] [-a view|edit|send] [-c MIMETYPE] FILE"; exit 0 ;;
+    -t) title="${2:-}"; shift 2 || aa_usage "android-share -t <title>" ;;
+    -a) action="${2:-}"; shift 2 || aa_usage "android-share -a <action>" ;;
+    -c) mime="${2:-}";  shift 2 || aa_usage "android-share -c <mimetype>" ;;
+    *) break ;;
+  esac
+done
+
+file="${1:-}"
+[ -n "$file" ] || aa_usage "android-share [-t TITLE] FILE"
+[ -e "$file" ] || aa_die "$AA_EXIT_USAGE" "no such file: $file"
+
+aa_require_api termux-share
+set -- -t "$title" -a "$action"
+[ -n "$mime" ] && set -- "$@" -c "$mime"
+
+termux-share "$@" "$file" || aa_die "$AA_EXIT_RUNTIME" "termux-share failed for $file"
+aa_log share "shared $file"

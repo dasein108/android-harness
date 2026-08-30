@@ -1,0 +1,150 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Concise read-only diagnostic report for the Android agent environment.
+#   android-agent-status          human-readable report
+#   android-agent-status --json   same facts as JSON (needs jq for pretty output)
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+JSON=0
+case "${1:-}" in
+  -h|--help) echo "usage: android-agent-status [--json]"; exit 0 ;;
+  --json) JSON=1 ;;
+  "") ;;
+  *) aa_usage "android-agent-status [--json]" ;;
+esac
+
+prop() { getprop "$1" 2>/dev/null || echo "unknown"; }
+ver()  { command -v "$1" >/dev/null 2>&1 && { "$@" 2>/dev/null | head -1; } || echo "not-installed"; }
+
+ANDROID_RELEASE="$(prop ro.build.version.release)"
+ANDROID_SDK="$(prop ro.build.version.sdk)"
+DEVICE_MODEL="$(prop ro.product.model)"
+DEVICE_NAME="$(prop ro.product.device)"
+BUILD_ID="$(prop ro.build.id)"
+ARCH="$(uname -m)"
+KERNEL="$(uname -r)"
+TERMUX_VER="${TERMUX_VERSION:-unknown}"
+
+PY_VER="$(ver python --version)"
+PIP_VER="$(ver pip --version)"
+NODE_VER="$(ver node --version)"
+NPM_VER="$(ver npm --version)"
+CLAUDE_VER="$(ver claude --version)"
+
+CPU_COUNT="$(nproc 2>/dev/null || echo unknown)"
+CPU_MODEL="$(sed -n 's/^Hardware[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -1)"
+[ -n "$CPU_MODEL" ] || CPU_MODEL="$(prop ro.board.platform)"
+
+MEM_TOTAL_KB="$(sed -n 's/^MemTotal:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo 2>/dev/null)"
+MEM_AVAIL_KB="$(sed -n 's/^MemAvailable:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo 2>/dev/null)"
+mb() { [ -n "${1:-}" ] && echo $(( $1 / 1024 )) || echo 0; }
+
+HOME_FREE="$(df -h "$HOME" 2>/dev/null | awk 'NR==2{print $4}')"
+SHARED_FREE="$(df -h "$HOME/storage/shared" 2>/dev/null | awk 'NR==2{print $4}')"
+SHARED_OK=no
+[ -d "$HOME/storage/shared" ] && [ -w "$HOME/storage/shared" ] && SHARED_OK=yes
+
+# Thermal: readable on some devices, silently absent on others.
+THERMAL="unavailable"
+for z in /sys/class/thermal/thermal_zone*/temp; do
+  [ -r "$z" ] || continue
+  t="$(cat "$z" 2>/dev/null)" || continue
+  case "$t" in ''|*[!0-9-]*) continue ;; esac
+  [ "$t" -gt 1000 ] && t=$(( t / 1000 ))
+  THERMAL="${t}C"
+  break
+done
+
+BATTERY="unavailable"
+if aa_have termux-battery-status; then
+  b="$(AA_API_TIMEOUT=8 aa_run_api termux-battery-status 2>/dev/null)" && [ -n "$b" ] && {
+    if aa_have jq; then
+      BATTERY="$(printf '%s' "$b" | jq -r '"\(.percentage)% \(.status) \(.temperature)C"' 2>/dev/null)"
+    else
+      BATTERY="$(printf '%s' "$b" | tr -d '\n ' )"
+    fi
+  }
+fi
+
+WIFI="unavailable"
+if aa_have termux-wifi-connectioninfo; then
+  w="$(AA_API_TIMEOUT=8 aa_run_api termux-wifi-connectioninfo 2>/dev/null)" && [ -n "$w" ] && {
+    if aa_have jq; then
+      WIFI="$(printf '%s' "$w" | jq -r '.ssid // "not-connected"' 2>/dev/null)"
+    else
+      WIFI="present"
+    fi
+  }
+fi
+
+NET="offline"
+if aa_have ping && ping -c1 -W2 127.0.0.1 >/dev/null 2>&1; then NET="loopback-ok"; fi
+if aa_have getprop; then
+  case "$(prop gsm.network.type)" in unknown|"") ;; *) NET="$NET,mobile:$(prop gsm.network.type)" ;; esac
+fi
+
+# Termux:API bridge probe: presence of the helper binaries, which is a
+# functional check of `pkg install termux-api`, plus one live call.
+API_BIN=no; aa_have termux-battery-status && API_BIN=yes
+API_LIVE=no; [ "$BATTERY" != "unavailable" ] && API_LIVE=yes
+
+SSHD="stopped"; pgrep -x sshd >/dev/null 2>&1 && SSHD="running"
+
+LISTENERS="$( (command -v ss >/dev/null 2>&1 && ss -lntu 2>/dev/null | tail -n +2) \
+             || (netstat -lntu 2>/dev/null | tail -n +3) || echo "unavailable" )"
+
+if [ "$JSON" -eq 1 ]; then
+  esc() { aa_json_escape "$1"; }
+  cat <<JSONOUT
+{
+  "android": { "release": "$(esc "$ANDROID_RELEASE")", "sdk": "$(esc "$ANDROID_SDK")", "build": "$(esc "$BUILD_ID")" },
+  "device":  { "model": "$(esc "$DEVICE_MODEL")", "name": "$(esc "$DEVICE_NAME")", "arch": "$(esc "$ARCH")", "kernel": "$(esc "$KERNEL")" },
+  "termux":  { "version": "$(esc "$TERMUX_VER")", "prefix": "$(esc "${PREFIX:-}")", "home": "$(esc "$HOME")" },
+  "runtime": { "python": "$(esc "$PY_VER")", "pip": "$(esc "$PIP_VER")", "node": "$(esc "$NODE_VER")", "npm": "$(esc "$NPM_VER")", "claude": "$(esc "$CLAUDE_VER")" },
+  "hardware":{ "cpus": "$(esc "$CPU_COUNT")", "cpu_model": "$(esc "$CPU_MODEL")", "mem_total_mb": $(mb "$MEM_TOTAL_KB"), "mem_available_mb": $(mb "$MEM_AVAIL_KB"), "thermal": "$(esc "$THERMAL")" },
+  "storage": { "home_free": "$(esc "${HOME_FREE:-unknown}")", "shared_free": "$(esc "${SHARED_FREE:-unknown}")", "shared_writable": "$SHARED_OK" },
+  "android_api": { "helpers_installed": "$API_BIN", "live_call_ok": "$API_LIVE" },
+  "state": { "battery": "$(esc "$BATTERY")", "wifi": "$(esc "$WIFI")", "network": "$(esc "$NET")", "sshd": "$SSHD" }
+}
+JSONOUT
+  exit 0
+fi
+
+cat <<REPORT
+android-agent status
+====================
+Android          $ANDROID_RELEASE (SDK $ANDROID_SDK, build $BUILD_ID)
+Device           $DEVICE_MODEL ($DEVICE_NAME), $ARCH, kernel $KERNEL
+Termux           $TERMUX_VER   PREFIX=${PREFIX:-unset}
+Agent root       $AA_ROOT
+
+Runtimes
+  python         $PY_VER
+  pip            $PIP_VER
+  node           $NODE_VER
+  npm            $NPM_VER
+  claude         $CLAUDE_VER
+
+Hardware
+  cpus           $CPU_COUNT ($CPU_MODEL)
+  memory         $(mb "$MEM_AVAIL_KB") MB available / $(mb "$MEM_TOTAL_KB") MB total
+  thermal        $THERMAL
+
+Storage
+  \$HOME free     ${HOME_FREE:-unknown}
+  shared free    ${SHARED_FREE:-unknown}
+  shared write   $SHARED_OK   ($HOME/storage/shared)
+
+Android bridge
+  helpers        $API_BIN      (pkg termux-api)
+  live call      $API_LIVE     (Termux:API app)
+  battery        $BATTERY
+  wifi           $WIFI
+  network        $NET
+
+Control channel
+  sshd           $SSHD (expected: 127.0.0.1:8022, reachable only via adb forward)
+
+Listening sockets
+$LISTENERS
+REPORT

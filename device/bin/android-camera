@@ -1,0 +1,38 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Capture a still image. Prints the absolute path of the written file.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+cam=0
+out=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) echo "usage: android-camera [-c CAMERA_ID] [OUTPUT.jpg]  (--list to enumerate cameras)"; exit 0 ;;
+    --list) aa_run_api termux-camera-info; exit $? ;;
+    -c) cam="${2:-}"; shift 2 || aa_usage "android-camera -c <id>" ;;
+    *)  out="$1"; shift ;;
+  esac
+done
+
+if [ -z "$out" ]; then
+  mkdir -p "$AA_ROOT/output"
+  out="$AA_ROOT/output/camera-$(date '+%Y%m%d-%H%M%S').jpg"
+fi
+case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
+
+aa_run_api termux-camera-photo -c "$cam" "$out" >/dev/null || exit $?
+
+if [ ! -s "$out" ]; then
+  rm -f "$out"
+  # Android refuses camera access to apps that are not in the foreground, and
+  # Termux:API reports that refusal as an empty file rather than an error.
+  aa_err "error: camera produced no image."
+  aa_err "hint:  Android blocks the camera for background apps. Bring Termux to the"
+  aa_err "       foreground and retry (from the Mac: aa ui launch com.termux)."
+  aa_err "hint:  also check the permission is granted (from the Mac: aa grant camera)"
+  aa_err "       and that no other app is holding the camera."
+  exit "$AA_EXIT_RUNTIME"
+fi
+aa_log camera "captured $out"
+printf '%s\n' "$out"

@@ -1,0 +1,525 @@
+#!/usr/bin/env bash
+# aa — Mac-side control CLI for the Android agent harness.
+#
+# Transport: USB only. `adb forward` maps a loopback port on this Mac to the
+# phone's loopback port 8022, where Termux's sshd listens. Nothing is exposed on
+# the LAN, and no traffic leaves the machine.
+#
+#   Mac 127.0.0.1:8022  ==(adb forward, USB)==>  phone 127.0.0.1:8022  ==> sshd
+#
+# Run `aa help` for the command list.
+
+set -uo pipefail
+
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/.." && pwd)"
+KEY="$REPO/keys/android_agent_ed25519"
+STATE_DIR="$REPO/state"
+STATE="$STATE_DIR/device.env"
+
+LOCAL_PORT="${AA_LOCAL_PORT:-8022}"
+REMOTE_PORT=8022
+SSH_HOST=127.0.0.1
+
+mkdir -p "$STATE_DIR"
+# shellcheck source=lib/permissions.sh
+. "$REPO/mac/lib/permissions.sh"
+# shellcheck source=lib/cmd-permissions.sh
+. "$REPO/mac/lib/cmd-permissions.sh"
+# shellcheck disable=SC1090
+[ -f "$STATE" ] && . "$STATE"
+AA_USER="${AA_USER:-}"
+AA_HOME="${AA_HOME:-/data/data/com.termux/files/home}"
+
+# ---------------------------------------------------------------------------
+c_red()  { printf '\033[31m%s\033[0m\n' "$*"; }
+c_grn()  { printf '\033[32m%s\033[0m\n' "$*"; }
+c_dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
+die()    { c_red "error: $*" >&2; exit 1; }
+need()   { command -v "$1" >/dev/null 2>&1 || die "$1 is not installed"; }
+
+SSH_OPTS=(
+  -i "$KEY"
+  -p "$LOCAL_PORT"
+  -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile="$STATE_DIR/known_hosts"
+  -o ConnectTimeout=8
+  -o PasswordAuthentication=no
+  -o LogLevel=ERROR
+)
+
+ssh_target() {
+  [ -n "$AA_USER" ] || die "device user unknown — run 'aa bootstrap' first"
+  printf '%s@%s' "$AA_USER" "$SSH_HOST"
+}
+
+SCP_OPTS=(
+  -i "$KEY"
+  -P "$LOCAL_PORT"
+  -o StrictHostKeyChecking=accept-new
+  -o UserKnownHostsFile="$STATE_DIR/known_hosts"
+  -o PasswordAuthentication=no
+  -o LogLevel=ERROR
+)
+
+dev_ssh()  { ssh "${SSH_OPTS[@]}" "$(ssh_target)" "$@"; }
+dev_scp()  { scp "${SCP_OPTS[@]}" "$@"; }
+
+adb_one() {
+  # Fail clearly when zero or several devices are attached.
+  local n
+  n="$(adb devices | awk 'NR>1 && $2=="device"' | wc -l | tr -d ' ')"
+  [ "$n" = 1 ] || die "expected exactly one authorized device over USB, found $n (adb devices)"
+}
+
+ensure_forward() {
+  adb forward --list 2>/dev/null | grep -q "tcp:$LOCAL_PORT" \
+    || adb forward "tcp:$LOCAL_PORT" "tcp:$REMOTE_PORT" >/dev/null \
+    || die "adb forward failed"
+}
+
+save_state() {
+  {
+    echo "AA_USER=$AA_USER"
+    echo "AA_HOME=$AA_HOME"
+  } > "$STATE"
+  chmod 600 "$STATE"
+}
+
+# ---------------------------------------------------------------------------
+cmd_help() {
+  cat <<'HELP'
+aa — Android agent harness control (Mac side, USB only)
+
+  aa doctor                  check adb, device, key, forward, ssh reachability
+  aa bootstrap               first-run: install the loopback ssh channel on the phone
+  aa forward [--off]         set up / tear down the adb port forward
+  aa provision [ARGS...]     copy device/ to the phone and run install.sh (idempotent)
+                             ARGS pass through, e.g. --media, --no-claude
+  aa shell [CMD...]          interactive shell, or run one command over the channel
+  aa claude [ARGS...]        run Claude Code on the phone with a TTY, in the agent
+                             workspace (no args = interactive; first run: /login)
+  aa push LOCAL REMOTE       copy a file to the phone
+  aa pull REMOTE LOCAL       copy a file from the phone
+  aa status                  android-agent-status on the device
+  aa manifest [--refresh]    capability manifest
+  aa test [--full]           device end-to-end suite
+  aa audit                   host network-exposure audit + device security audit
+  aa netaudit                authoritative listener table read from the phone via adb
+  aa report                  combined final report (status + tests + audit + host view)
+  aa reset --soft|--full [--purge-workspace]
+  aa server start|stop|restart|status|logs
+
+  aa ui screenshot [OUT.png] capture the screen (adb screencap)
+  aa ui dump [OUT.xml]       uiautomator view hierarchy
+  aa ui state                foreground activity, display and lock state
+  aa ui tap X Y
+  aa ui swipe X1 Y1 X2 Y2 [MS]
+  aa ui text "some text"
+  aa ui key HOME|BACK|ENTER|TAB|...
+  aa ui launch PACKAGE
+  aa ui apps [FILTER]        list installed third-party packages
+
+  aa permissions [show|--pick|--profile NAME|--grant a,b|--revoke a,b]
+                             review and change what the agent may do (see --help)
+  aa grant camera|location   grant an Android runtime permission to Termux:API
+  aa grant storage           grant Termux "all files access" (MANAGE_EXTERNAL_STORAGE)
+                             (owner-authorized; prints what it changes)
+HELP
+}
+
+# ---------------------------------------------------------------------------
+cmd_doctor() {
+  need adb; need ssh; need ssh-keygen
+  echo "host"
+  c_dim "  adb        $(adb version | head -1)"
+  c_dim "  ssh        $(ssh -V 2>&1)"
+
+  echo "device"
+  local n; n="$(adb devices | awk 'NR>1 && $2=="device"' | wc -l | tr -d ' ')"
+  if [ "$n" = 1 ]; then
+    c_grn "  ok         $(adb devices -l | awk 'NR==2{print $1, $4, $5}')"
+    c_dim "  android    $(adb shell getprop ro.build.version.release | tr -d '\r') (SDK $(adb shell getprop ro.build.version.sdk | tr -d '\r'))"
+    c_dim "  abi        $(adb shell getprop ro.product.cpu.abi | tr -d '\r')"
+    local tx; tx="$(adb shell pm list packages | tr -d '\r' | grep -c '^package:com\.termux')"
+    c_dim "  termux pkgs $tx (com.termux, com.termux.api expected)"
+  else
+    c_red "  no single authorized device ($n found)"
+    return 1
+  fi
+
+  echo "key"
+  if [ -f "$KEY" ]; then
+    c_grn "  ok         $KEY ($(ssh-keygen -lf "$KEY.pub" | awk '{print $1, $2}'))"
+    [ "$(stat -f %Lp "$KEY" 2>/dev/null || stat -c %a "$KEY")" = 600 ] \
+      || c_red "  key is not mode 600"
+  else
+    c_red "  missing    $KEY (run: ssh-keygen -t ed25519 -N '' -f $KEY)"
+  fi
+
+  echo "channel"
+  ensure_forward
+  c_grn "  forward    $(adb forward --list | grep "tcp:$LOCAL_PORT" || echo none)"
+  if [ -z "$AA_USER" ]; then
+    c_red "  ssh        device user unknown — run 'aa bootstrap'"
+    return 1
+  fi
+  if dev_ssh 'echo channel-ok' 2>/dev/null | grep -q channel-ok; then
+    c_grn "  ssh        $(ssh_target):$LOCAL_PORT reachable"
+  else
+    c_red "  ssh        cannot reach $(ssh_target):$LOCAL_PORT — is sshd running? (aa server start)"
+    return 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+cmd_bootstrap() {
+  need adb; adb_one
+  [ -f "$KEY.pub" ] || die "no public key at $KEY.pub"
+
+  echo "== bootstrap: installing the loopback ssh channel =="
+  echo "This types one command into the Termux app on the phone. Keep the screen"
+  echo "unlocked; approve the storage-permission dialog if it appears."
+
+  adb push "$REPO/device/bootstrap.sh" /sdcard/Download/aa-bootstrap.sh >/dev/null \
+    || die "adb push failed"
+  adb push "$KEY.pub" /sdcard/Download/aa-authorized_key.pub >/dev/null \
+    || die "adb push failed"
+  adb shell rm -f /sdcard/Download/aa-bootstrap.log >/dev/null 2>&1
+
+  # Bring Termux forward. `monkey` is more reliable than `am start` here: an
+  # `am start` can report success while another app stays resumed.
+  adb shell monkey -p com.termux -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+    || die "could not launch Termux"
+
+  # Never type blind. Keystrokes go to whatever is resumed, so confirm Termux
+  # owns the foreground before sending a single character — otherwise the
+  # command lands in someone's chat app.
+  local fg i
+  for i in $(seq 1 10); do
+    sleep 1
+    fg="$(adb shell dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity | tr -d '\r')"
+    case "$fg" in *com.termux/*) break ;; esac
+  done
+  case "$fg" in
+    *com.termux/*) ;;
+    *) die "Termux is not in the foreground (resumed: ${fg:-unknown}). Refusing to type into another app." ;;
+  esac
+
+  # Termux's terminal takes plain key input. adb's `%s` space escape is not
+  # reliable across Android versions (it can inject stray characters), so send
+  # the space as its own keyevent and keep every `input text` argument
+  # space-free.
+  adb shell input keyevent 67 67 67 67 67 67 67 67   # clear any stray characters
+  adb shell input text 'bash' || die "input failed"
+  adb shell input keyevent 62                        # KEYCODE_SPACE
+  adb shell input text '/sdcard/Download/aa-bootstrap.sh' || die "input failed"
+
+  # Re-check before committing with Enter: an incoming notification or a screen
+  # timeout could have changed the foreground while we were typing.
+  fg="$(adb shell dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity | tr -d '\r')"
+  case "$fg" in
+    *com.termux/*) adb shell input keyevent 66 ;;    # KEYCODE_ENTER
+    *) die "foreground changed to ${fg:-unknown} mid-typing; not pressing Enter" ;;
+  esac
+
+  echo -n "waiting for the phone to finish"
+  local result=""
+  local _i
+  for _i in $(seq 1 90); do
+    sleep 2
+    printf '.'
+    result="$(adb shell "grep -m1 '^BOOTSTRAP_RESULT=' /sdcard/Download/aa-bootstrap.log 2>/dev/null" | tr -d '\r')"
+    [ -n "$result" ] && break
+  done
+  echo
+
+  local log; log="$(adb shell cat /sdcard/Download/aa-bootstrap.log 2>/dev/null | tr -d '\r')"
+  printf '%s\n' "$log" | sed 's/^/  /'
+
+  case "$result" in
+    BOOTSTRAP_RESULT=OK) ;;
+    "") die "timed out; the phone never wrote a result. Open Termux and check the visible output." ;;
+    *) die "bootstrap failed on the device (see the output above)" ;;
+  esac
+
+  AA_USER="$(printf '%s\n' "$log" | sed -n 's/^AA_USER=//p' | tr -d '\r')"
+  AA_HOME="$(printf '%s\n' "$log" | sed -n 's/^AA_HOME=//p' | tr -d '\r')"
+  [ -n "$AA_USER" ] || die "could not read the device user from the bootstrap log"
+  save_state
+  c_grn "device user: $AA_USER"
+
+  # The bootstrap files carried nothing secret (a public key and a script), but
+  # leave no clutter behind in the owner's Download folder. The log goes too,
+  # now that it has been read — on failure this line is never reached, so the
+  # log stays put for troubleshooting.
+  adb shell rm -f /sdcard/Download/aa-bootstrap.sh /sdcard/Download/aa-authorized_key.pub \
+                  /sdcard/Download/aa-bootstrap.log >/dev/null 2>&1
+
+  ensure_forward
+  if dev_ssh 'echo channel-ok' 2>/dev/null | grep -q channel-ok; then
+    c_grn "channel up: ssh $(ssh_target) -p $LOCAL_PORT (loopback, USB only)"
+  else
+    die "ssh still unreachable; run 'aa doctor'"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+cmd_forward() {
+  need adb
+  if [ "${1:-}" = "--off" ]; then
+    adb forward --remove "tcp:$LOCAL_PORT" 2>/dev/null && echo "forward removed" || echo "no forward"
+    return 0
+  fi
+  adb_one; ensure_forward
+  adb forward --list
+}
+
+cmd_provision() {
+  need adb; adb_one; ensure_forward
+  [ -n "$AA_USER" ] || die "run 'aa bootstrap' first"
+
+  echo "== copying harness to the device =="
+  dev_ssh "mkdir -p $AA_HOME/.android-harness-src" || die "cannot create staging dir"
+  # tar over ssh: one round trip, preserves modes, no rsync dependency on Termux.
+  # --no-xattrs/--no-mac-metadata: macOS bsdtar otherwise ships Finder xattrs
+  # that Termux's tar warns about on every single file.
+  ( cd "$REPO/device" && tar --no-xattrs --no-mac-metadata -cf - . 2>/dev/null || tar cf - . ) \
+    | dev_ssh "tar xf - -C $AA_HOME/.android-harness-src" \
+    || die "transfer failed"
+  dev_ssh "chmod 700 $AA_HOME/.android-harness-src/install.sh $AA_HOME/.android-harness-src/uninstall.sh" >/dev/null 2>&1
+
+  echo "== running install.sh on the device =="
+  dev_ssh "bash $AA_HOME/.android-harness-src/install.sh $*"
+  local rc=$?
+  [ $rc -eq 0 ] && c_grn "provision OK" || c_red "provision reported failures (exit $rc)"
+  return $rc
+}
+
+cmd_shell() {
+  need adb; ensure_forward
+  if [ $# -eq 0 ]; then dev_ssh -t 'bash -l'; else dev_ssh "$@"; fi
+}
+
+cmd_claude() {
+  # Run Claude Code on the phone with a real TTY, from the Mac. A TTY is what
+  # `/login` and the interactive UI need; `aa shell CMD` deliberately does not
+  # allocate one.
+  ensure_forward
+  local q=""
+  local a
+  for a in "$@"; do q="$q $(printf '%q' "$a")"; done
+  dev_ssh -t "source '$AA_HOME/android-agent/config/environment'; cd '$AA_HOME/android-agent/workspace' && claude$q"
+}
+
+cmd_push() {
+  [ $# -eq 2 ] || die "usage: aa push LOCAL REMOTE"
+  ensure_forward
+  dev_scp "$1" "$(ssh_target):$2"
+}
+
+cmd_pull() {
+  [ $# -eq 2 ] || die "usage: aa pull REMOTE LOCAL"
+  ensure_forward
+  dev_scp "$(ssh_target):$1" "$2"
+}
+
+remote_agent() { # run an agent command with the environment loaded
+  ensure_forward
+  dev_ssh "source $AA_HOME/android-agent/config/environment 2>/dev/null; $*"
+}
+
+# ---------------------------------------------------------------------------
+cmd_ui() {
+  need adb; adb_one
+  local sub="${1:-}"; shift || true
+  # Read-only inspection and synthetic input are separate switches: you may want
+  # to look at the screen without letting anything type on it.
+  case "$sub" in
+    screenshot|dump|state|apps) aa_require_feature adb-read  "aa ui $sub" ;;
+    tap|swipe|text|key|launch)  aa_require_feature adb-input "aa ui $sub" ;;
+  esac
+  case "$sub" in
+    screenshot)
+      local out="${1:-screen-$(date '+%Y%m%d-%H%M%S').png}"
+      adb exec-out screencap -p > "$out" || die "screencap failed"
+      [ -s "$out" ] || { rm -f "$out"; die "screencap produced an empty file"; }
+      echo "$out" ;;
+    dump)
+      local out="${1:-}"
+      local xml
+      xml="$(adb exec-out uiautomator dump /dev/tty 2>/dev/null | sed 's/UI hierchary dumped to: \/dev\/tty//')"
+      [ -n "$xml" ] || die "uiautomator dump failed (is a foreground app blocking it?)"
+      if [ -n "$out" ]; then printf '%s\n' "$xml" > "$out"; echo "$out"; else printf '%s\n' "$xml"; fi ;;
+    state)
+      echo "foreground:"
+      adb shell dumpsys activity activities 2>/dev/null | grep -m1 -E 'topResumedActivity' | sed 's/^/  /'
+      echo "display:"
+      adb shell dumpsys power 2>/dev/null | grep -m1 'mWakefulness=' | sed 's/^/  /'
+      echo "size/density:"
+      adb shell wm size 2>/dev/null | sed 's/^/  /'
+      adb shell wm density 2>/dev/null | sed 's/^/  /' ;;
+    tap)   [ $# -eq 2 ] || die "usage: aa ui tap X Y"; adb shell input tap "$1" "$2" ;;
+    swipe) [ $# -ge 4 ] || die "usage: aa ui swipe X1 Y1 X2 Y2 [MS]"; adb shell input swipe "$@" ;;
+    text)  [ $# -ge 1 ] || die "usage: aa ui text \"...\""
+           # adb's input text wants %s for spaces and cannot carry newlines.
+           local t="$*"; adb shell input text "$(printf '%s' "$t" | sed 's/ /%s/g')" ;;
+    key)   [ $# -ge 1 ] || die "usage: aa ui key KEYCODE"; adb shell input keyevent "$@" ;;
+    launch)
+      [ $# -eq 1 ] || die "usage: aa ui launch PACKAGE"
+      adb shell monkey -p "$1" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+        && echo "launched $1" || die "could not launch $1" ;;
+    apps)
+      adb shell pm list packages -3 | tr -d '\r' | sed 's/^package://' | sort \
+        | { [ -n "${1:-}" ] && grep -i "$1" || cat; } ;;
+    *) die "unknown: aa ui $sub (see aa help)" ;;
+  esac
+}
+
+cmd_netaudit() {
+  # Authoritative listener audit. It has to run from the host: Android denies an
+  # untrusted_app uid both the netlink socket `ss` uses and /proc/net/tcp, so the
+  # same check run inside Termux sees an empty table and would pass vacuously.
+  need adb; adb_one
+  command -v python3 >/dev/null 2>&1 || die "python3 is needed to decode /proc/net"
+
+  local parsed uidmap termux_uid
+  parsed="$(adb shell 'for f in /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6; do echo "#FILE $f"; cat $f 2>/dev/null; done' \
+            | tr -d '\r' | python3 "$REPO/mac/lib/listeners.py")"
+  [ -n "$parsed" ] || die "could not read the device's socket tables"
+
+  # One shot: `uid<TAB>package[,package...]`. Doing an adb call per row instead
+  # would both be slow and steal the loop's stdin.
+  uidmap="$(adb shell 'pm list packages -U' 2>/dev/null | tr -d '\r' \
+            | sed -n 's/^package:\([^ ]*\) uid:\([0-9]*\)$/\2 \1/p' \
+            | sort -k1,1n | awk '{ if ($1==u) { p=p","$2 } else { if (u!="") print u"\t"p; u=$1; p=$2 } } END { if (u!="") print u"\t"p }')"
+  termux_uid="$(printf '%s\n' "$uidmap" | awk -F'\t' '$2 ~ /(^|,)com\.termux(,|$)/ { print $1; exit }')"
+  [ -n "$termux_uid" ] || die "could not determine the Termux uid on this device"
+
+  echo "listeners on the device (authoritative, read from /proc/net via adb)"
+  printf '  %-6s %-24s %-6s %-9s %s\n' PROTO ADDRESS PORT SCOPE OWNER
+  local foreign=0 ours_exposed=0 ours=0
+  while IFS=$'\t' read -r proto addr port uid; do
+    [ -n "${proto:-}" ] || continue
+    local scope owner
+    case "$addr" in
+      127.*|::1|0:0:0:0:0:0:0:1|::ffff:127.*) scope=loopback ;;
+      0.0.0.0|::|0:0:0:0:0:0:0:0)             scope=WILDCARD ;;
+      *)                                      scope=LAN ;;
+    esac
+    owner="$(printf '%s\n' "$uidmap" | awk -F'\t' -v u="$uid" '$1==u { print $2; exit }')"
+    [ -n "$owner" ] || owner="uid $uid (system/native)"
+    if [ "$uid" = "$termux_uid" ]; then
+      owner="$owner  <-- this harness"
+      ours=$((ours+1))
+      [ "$scope" = loopback ] || ours_exposed=1
+    elif [ "$scope" != loopback ]; then
+      foreign=$((foreign+1))
+    fi
+    printf '  %-6s %-24s %-6s %-9s %s\n' "$proto" "$addr" "$port" "$scope" "$owner"
+  done <<< "$parsed"
+
+  echo
+  if [ "$ours_exposed" -eq 1 ]; then
+    c_red "FAIL: a listener owned by this harness is bound beyond loopback"
+    return 1
+  fi
+  c_grn "OK: all $ours listener(s) owned by this harness (uid $termux_uid) are loopback-only"
+  if [ "$foreign" -gt 0 ]; then
+    c_dim "note: $foreign non-loopback listener(s) belong to other apps that were already on"
+    c_dim "      the phone. They are outside this harness and were left untouched."
+  fi
+  return 0
+}
+
+cmd_grant() {
+  need adb; adb_one
+  aa_require_feature adb-grant "aa grant"
+  local what="${1:-}"
+  case "$what" in
+    camera)
+      echo "granting android.permission.CAMERA to com.termux.api"
+      adb shell pm grant com.termux.api android.permission.CAMERA || die "grant failed" ;;
+    location)
+      echo "granting ACCESS_COARSE_LOCATION + ACCESS_FINE_LOCATION to com.termux.api"
+      adb shell pm grant com.termux.api android.permission.ACCESS_COARSE_LOCATION || die "grant failed"
+      adb shell pm grant com.termux.api android.permission.ACCESS_FINE_LOCATION   || die "grant failed" ;;
+    storage)
+      # "All files access". Termux already reads shared storage through legacy
+      # storage (its targetSdk is 28); this adds other apps' directories under
+      # /Android/data and /Android/obb. It is a broad grant — hence explicit.
+      echo "granting MANAGE_EXTERNAL_STORAGE (all files access) to com.termux"
+      adb shell appops set --uid com.termux MANAGE_EXTERNAL_STORAGE allow || die "appops set failed"
+      adb shell appops get com.termux MANAGE_EXTERNAL_STORAGE ;;
+    *) die "usage: aa grant camera|location|storage" ;;
+  esac
+  case "$what" in
+    storage) echo "done. Revoke with: adb shell appops set --uid com.termux MANAGE_EXTERNAL_STORAGE default" ;;
+    *)       echo "done. Revoke with: adb shell pm revoke com.termux.api <permission>" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+cmd_report() {
+  ensure_forward
+  echo "############################################################"
+  echo "# android-harness final report"
+  echo "# $(date)"
+  echo "############################################################"
+  echo
+  echo "### HOST VIEW (Mac)"
+  echo "adb devices:"; adb devices -l | sed 's/^/  /'
+  echo "adb forwards:"; adb forward --list | sed 's/^/  /'
+  echo "control key: $(ssh-keygen -lf "$KEY.pub" 2>/dev/null | awk '{print $1, $2, $4}')"
+  echo
+  echo "### DEVICE STATUS"
+  remote_agent 'android-agent-status' || true
+  echo
+  echo "### CAPABILITY MANIFEST"
+  remote_agent 'android-agent-manifest' || true
+  echo
+  echo "### END-TO-END TESTS"
+  remote_agent '$AA_ROOT/tests/e2e.sh' || true
+  echo
+  echo "### NETWORK EXPOSURE (host-side, authoritative)"
+  cmd_netaudit || true
+  echo
+  echo "### SECURITY AUDIT (device-side)"
+  remote_agent '$AA_ROOT/security/audit.sh' || true
+}
+
+# ---------------------------------------------------------------------------
+main() {
+  local cmd="${1:-help}"; shift || true
+  case "$cmd" in
+    help|-h|--help) cmd_help ;;
+    doctor)    cmd_doctor "$@" ;;
+    bootstrap) cmd_bootstrap "$@" ;;
+    forward)   cmd_forward "$@" ;;
+    provision) cmd_provision "$@" ;;
+    shell)     cmd_shell "$@" ;;
+    claude)    cmd_claude "$@" ;;
+    push)      cmd_push "$@" ;;
+    pull)      cmd_pull "$@" ;;
+    status)    remote_agent 'android-agent-status' "$@" ;;
+    manifest)  remote_agent "android-agent-manifest ${*:-}" ;;
+    test)      remote_agent "\$AA_ROOT/tests/e2e.sh ${*:-}" ;;
+    audit)     # Both halves must pass. The host half is the authoritative
+               # listener check; the device half covers persistence and secrets.
+               audit_rc=0
+               cmd_netaudit || audit_rc=1
+               echo
+               remote_agent '$AA_ROOT/security/audit.sh' || audit_rc=1
+               exit "$audit_rc" ;;
+    netaudit)  cmd_netaudit ;;
+    reset)     ensure_forward
+               dev_ssh "bash '$AA_HOME/.android-harness-src/uninstall.sh' ${*:-}" ;;
+    server)    remote_agent "android-agent-server ${*:-status}" ;;
+    ui)        cmd_ui "$@" ;;
+    permissions|perms) cmd_permissions "$@" ;;
+    grant)     cmd_grant "$@" ;;
+    report)    cmd_report "$@" ;;
+    *) die "unknown command '$cmd' (aa help)" ;;
+  esac
+}
+
+main "$@"

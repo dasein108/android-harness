@@ -68,6 +68,20 @@ android-wake on|off                 wake lock for long jobs
 android-screenshot                  NOT available on-device — see UI automation
 ```
 
+Permissions (see the security rules below before changing anything):
+
+```
+android-permissions                 groups, risk, and what each unlocks
+android-permissions check GROUP     probe one group for real
+android-permissions open [GROUP]    open the Android Settings screen
+android-permissions setup           guided walk through the sensitive groups
+```
+
+You cannot grant yourself anything: `pm grant` throws SecurityException from
+this uid and there is no `appops` binary. Only the owner can, through Android
+Settings. If you need a permission, say so and point at
+`android-permissions open <group>` — do not attempt workarounds.
+
 Agent management:
 
 ```

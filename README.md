@@ -2,7 +2,10 @@
 
 Turn an Android phone into a full agent environment — Python, Node, **Claude
 Code**, camera, location, clipboard, notifications, shared storage, UI
-automation — provisioned in one command from your Mac over USB.
+automation.
+
+Install it **on the phone alone**, or drive it from a Mac over USB. Both paths
+are one command.
 
 Maximum local capability, minimum attack surface. The control channel is bound
 to `127.0.0.1` on the phone and reachable only through the USB cable. Nothing
@@ -17,8 +20,8 @@ Verified on a Pixel 7a, Android 17, Termux 0.118.3: Claude Code 2.1.251, Python
 ## Contents
 
 - [What you get](#what-you-get)
-- [Prerequisites](#prerequisites)
-- [Install](#install)
+- [Install on the phone alone](#install-on-the-phone-alone)
+- [Install from a Mac](#install-from-a-mac)
 - [Using it on the phone](#using-it-on-the-phone)
 - [Using it from the Mac](#using-it-from-the-mac)
 - [Permissions](#permissions)
@@ -52,11 +55,84 @@ On the Mac, one CLI called `aa`:
 | **Claude Code** | `aa claude` — runs it on the phone with a real TTY |
 | **UI automation** | `aa ui screenshot / dump / state / tap / swipe / text / key / launch` |
 | **Permissions** | `aa permissions` — a risk-labelled picker, not a wall of `pm grant` |
+| **Tamper check** | `aa policy check` — a baseline the phone cannot edit |
 | **Verification** | `aa test`, `aa netaudit`, `aa audit`, `aa report` |
 
 ---
 
-## Prerequisites
+## Install on the phone alone
+
+No computer, no cable, no adb. Open **Termux** and run:
+
+```bash
+pkg install curl
+curl -fsSL https://raw.githubusercontent.com/dasein108/android-harness/main/phone-install.sh -o install.sh
+less install.sh          # read it first
+bash install.sh
+```
+
+That fetches the harness, installs the packages, Python, Node and Claude Code,
+writes the home-screen shortcuts, then runs the end-to-end suite and the
+security audit. It refuses to claim success if either fails.
+
+You need on the phone:
+
+- **Termux** and **Termux:API**, both from **F-Droid** or the **GitHub
+  releases** — never the Play Store builds, which are abandoned. Install both
+  from the *same* source or Android rejects the second one on a signature
+  mismatch.
+  - <https://f-droid.org/packages/com.termux/>
+  - <https://f-droid.org/packages/com.termux.api/>
+- Optional: **Termux:Widget**, for the one-tap Claude Code launcher.
+- ~1 GB free, mostly Claude Code's native binary and the glibc runtime.
+
+Options:
+
+```bash
+bash install.sh --media          # + imagemagick, ffmpeg, poppler
+bash install.sh --no-claude      # skip Claude Code
+bash install.sh --with-server    # also set up the SSH channel, for a computer later
+```
+
+**Phone-only installs run no listener at all.** The SSH control channel exists
+solely so a computer can connect over USB; with no computer in the picture, it
+is not configured and not started. Verified after a real phone-only install:
+
+```
+$ aa netaudit
+OK: all 0 listener(s) owned by this harness are loopback-only
+```
+
+Zero, not "loopback-only". The surface is absent rather than merely unused.
+
+### Permissions, on the phone
+
+```bash
+android-permissions              # the groups, and what each unlocks
+android-permissions setup        # guided walk through the sensitive ones
+android-permissions check camera # probe one for real
+android-permissions open camera  # jump straight to the Settings screen
+```
+
+Termux **cannot grant itself anything** — `pm grant` throws `SecurityException`
+from an app uid and there is no `appops` binary. Only Android Settings can
+grant, which is exactly why the agent cannot quietly widen its own reach. What
+`android-permissions` does is take you to the right screen and tell you what
+happened.
+
+It cannot read permission state either (`dumpsys` is unavailable to an app uid),
+so `check` establishes state by *using* the API and reading the error Termux:API
+returns. Camera and microphone probes are intrusive — a photo, a one-second
+recording — so they only run when you ask for them.
+
+---
+
+## Install from a Mac
+
+Use this when you want the extras a host gives you: screenshots, UI automation,
+permission grants without tapping, and the authoritative listener audit.
+
+### Prerequisites
 
 **On the Mac (or a Linux host):**
 
@@ -76,9 +152,7 @@ On the Mac, one CLI called `aa`:
 
 You do **not** need root. Nothing here requires it, and nothing asks for it.
 
----
-
-## Install
+### Setup
 
 One command, from the Mac, with the phone plugged in and unlocked:
 
@@ -238,8 +312,12 @@ mysterious failure.
 
 ## Permissions
 
+*From a Mac. For the phone-only equivalent see
+[Permissions, on the phone](#permissions-on-the-phone).*
+
 You choose what the agent may do. Nothing sensitive is granted without you
-saying so.
+saying so. With a host attached, grants are applied over adb instead of by
+tapping through Settings.
 
 ```bash
 aa permissions              # live state, read from the device
@@ -387,6 +465,7 @@ There is no third channel.
 
 ```
 android-harness/
+  phone-install.sh          one-shot setup, run in Termux on the phone itself
   install.sh                one-shot setup, run on the Mac
   mac/aa                    the control CLI
   mac/lib/                  permission groups, the /proc/net decoder
@@ -398,7 +477,7 @@ android-harness/
     uninstall.sh            soft / full reset
     CLAUDE.md               instructions for the agent running on the phone
     lib/aa-common.sh        shared helpers, exit-code contract
-    bin/android-*           the Android bridge
+    bin/android-*           the Android bridge, incl. android-permissions
     tests/e2e.sh            functional end-to-end suite
     security/audit.sh       exposure and persistence audit
   docs/

@@ -251,7 +251,13 @@ type_into_termux() {
   done
   case "$fg" in
     *com.termux/*) ;;
-    *) die "Termux is not in the foreground (resumed: ${fg:-unknown}). Refusing to type into another app." ;;
+    *)
+      # A locked screen hides the resumed activity entirely, which otherwise
+      # reads as a confusing "unknown". Name the actual problem.
+      if [ "$(adb shell dumpsys window 2>/dev/null | grep -m1 isKeyguardShowing | tr -d '\r ' | cut -d= -f2)" = "true" ]; then
+        die "the phone is locked. Unlock it and re-run — keystrokes cannot reach Termux through a keyguard."
+      fi
+      die "Termux is not in the foreground (resumed: ${fg:-unknown}). Refusing to type into another app." ;;
   esac
 
   adb shell input keyevent 67 67 67 67 67 67 67 67   # clear any stray characters

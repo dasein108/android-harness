@@ -375,8 +375,13 @@ cmd_ui() {
       adb shell monkey -p "$1" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
         && echo "launched $1" || die "could not launch $1" ;;
     apps)
-      adb shell pm list packages -3 | tr -d '\r' | sed 's/^package://' | sort \
-        | { [ -n "${1:-}" ] && grep -i "$1" || cat; } ;;
+      # A filter that matches nothing should print nothing, so branch on the
+      # filter rather than relying on grep's exit status.
+      if [ -n "${1:-}" ]; then
+        adb shell pm list packages -3 | tr -d '\r' | sed 's/^package://' | sort | grep -i -- "$1"
+      else
+        adb shell pm list packages -3 | tr -d '\r' | sed 's/^package://' | sort
+      fi ;;
     *) die "unknown: aa ui $sub (see aa help)" ;;
   esac
 }
@@ -495,6 +500,9 @@ cmd_server() {
 
 cmd_report() {
   ensure_forward
+  # Sections keep running after a failure so the report stays complete, but the
+  # verdict — and the exit code — must still reflect it.
+  local rc=0
   echo "############################################################"
   echo "# android-harness final report"
   echo "# $(date)"
@@ -512,13 +520,23 @@ cmd_report() {
   remote_agent 'android-agent-manifest' || true
   echo
   echo "### END-TO-END TESTS"
-  remote_agent '$AA_ROOT/tests/e2e.sh' || true
+  remote_agent '$AA_ROOT/tests/e2e.sh' || rc=1
   echo
   echo "### NETWORK EXPOSURE (host-side, authoritative)"
-  cmd_netaudit || true
+  cmd_netaudit || rc=1
   echo
   echo "### SECURITY AUDIT (device-side)"
-  remote_agent '$AA_ROOT/security/audit.sh' || true
+  remote_agent '$AA_ROOT/security/audit.sh' || rc=1
+
+  echo
+  echo "############################################################"
+  if [ "$rc" -eq 0 ]; then
+    c_grn "# REPORT VERDICT: PASS"
+  else
+    c_red "# REPORT VERDICT: FAIL — one or more sections above did not pass"
+  fi
+  echo "############################################################"
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -553,7 +571,7 @@ main() {
     policy)    cmd_policy "$@" ;;
     settings)  cmd_settings "$@" ;;
     grant)     cmd_grant "$@" ;;
-    report)    cmd_report "$@" ;;
+    report)    cmd_report "$@" ;;   # exits non-zero if any section failed
     *) die "unknown command '$cmd' (aa help)" ;;
   esac
 }

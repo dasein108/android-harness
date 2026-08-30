@@ -11,6 +11,10 @@
 
 set -uo pipefail
 
+# Print this file's own header comment as the usage text, so it can never
+# drift out of sync with a hard-coded line range.
+usage_from_header() { sed -n '2,/^[^#]/p' "$0" | sed -e 's/^# //' -e 's/^#$//'; }
+
 AA_ROOT="${AA_ROOT:-$HOME/android-agent}"
 [ -f "$AA_ROOT/lib/aa-common.sh" ] && . "$AA_ROOT/lib/aa-common.sh"
 export PATH="$AA_ROOT/bin:$PATH"
@@ -21,7 +25,7 @@ for a in "$@"; do
   case "$a" in
     --full) FULL=1 ;;
     --json) JSON=1 ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help) usage_from_header; exit 0 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac
 done
@@ -253,8 +257,14 @@ fi
 
 [ "$JSON" -eq 1 ] || {
   echo "-------------------------------------------------------------"
-  echo "listening sockets:"
-  printf '%s\n' "$LISTEN" | sed 's/^/  /'
+  if [ -z "$ADDRS" ]; then
+    echo "listening sockets: not visible to this uid (Android blocks /proc/net"
+    echo "                   and the netlink socket ss needs). Run 'aa netaudit'"
+    echo "                   on the host for the authoritative table."
+  else
+    echo "listening sockets:"
+    printf '%s\n' "$LISTEN" | sed 's/^/  /'
+  fi
   echo "-------------------------------------------------------------"
   printf 'PASS=%d FAIL=%d SKIP=%d\n' "$PASS" "$FAIL" "$SKIP"
   [ "$FAIL" -eq 0 ] && echo "E2E_RESULT=OK" || echo "E2E_RESULT=FAIL"

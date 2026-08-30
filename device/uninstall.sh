@@ -13,6 +13,10 @@
 
 set -uo pipefail
 
+# Print this file's own header comment as the usage text, so it can never
+# drift out of sync with a hard-coded line range.
+usage_from_header() { sed -n '2,/^[^#]/p' "$0" | sed -e 's/^# //' -e 's/^#$//'; }
+
 AA_ROOT="${AA_ROOT:-$HOME/android-agent}"
 MODE=""
 PURGE_WS=0
@@ -24,7 +28,7 @@ while [ $# -gt 0 ]; do
     --full) MODE=full; shift ;;
     --purge-workspace) PURGE_WS=1; shift ;;
     -y|--yes) ASSUME_YES=1; shift ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h|--help) usage_from_header; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done

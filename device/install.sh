@@ -14,6 +14,10 @@
 
 set -uo pipefail
 
+# Print this file's own header comment as the usage text, so it can never
+# drift out of sync with a hard-coded line range.
+usage_from_header() { sed -n '2,/^[^#]/p' "$0" | sed -e 's/^# //' -e 's/^#$//'; }
+
 AA_ROOT="${AA_ROOT:-$HOME/android-agent}"
 SRC_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
@@ -30,7 +34,7 @@ while [ $# -gt 0 ]; do
     --no-claude) DO_CLAUDE=0; shift ;;
     --no-packages) DO_PACKAGES=0; shift ;;
     --claude-version) CLAUDE_VERSION="${2:?--claude-version needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h|--help) usage_from_header; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -213,8 +217,11 @@ if ! grep -q '# >>> android-harness >>>' "$BASHRC"; then
     echo "[ -f \"$ENV_FILE\" ] && . \"$ENV_FILE\""
     echo '# <<< android-harness <<<'
   } >> "$BASHRC"
+  # The tilde here is prose in a status message, not a path being expanded.
+  # shellcheck disable=SC2088
   ok "added sourcing block to ~/.bashrc"
 else
+  # shellcheck disable=SC2088
   ok "~/.bashrc already sources the agent environment"
 fi
 

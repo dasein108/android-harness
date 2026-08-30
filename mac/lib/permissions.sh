@@ -148,6 +148,8 @@ aa_features_load() {
 }
 
 aa_features_save() { # aa_features_save "name name ..."
+  # Deliberate word splitting: one feature name per line.
+  # shellcheck disable=SC2086
   printf '%s\n' $1 > "$STATE_DIR/features.conf"
   chmod 600 "$STATE_DIR/features.conf"
 }

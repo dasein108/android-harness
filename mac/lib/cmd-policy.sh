@@ -37,13 +37,16 @@ aa_policy_invariants() {
   ensure_forward
   dev_ssh '
     conf="$PREFIX/etc/ssh/sshd_config"
-    la="$(grep -icE "^[[:space:]]*ListenAddress[[:space:]]+(127\.0\.0\.1|::1)$" "$conf" 2>/dev/null || echo 0)"
-    other="$(grep -icE "^[[:space:]]*ListenAddress[[:space:]]+" "$conf" 2>/dev/null || echo 0)"
-    pw="$(grep -icE "^[[:space:]]*PasswordAuthentication[[:space:]]+yes" "$conf" 2>/dev/null || echo 0)"
-    gw="$(grep -icE "^[[:space:]]*GatewayPorts[[:space:]]+yes" "$conf" 2>/dev/null || echo 0)"
+    # No `|| echo 0` here: `grep -c` already prints 0 when it matches nothing,
+    # and also exits 1, so the fallback would append a second line and split the
+    # summary across three lines.
+    la="$(grep -icE "^[[:space:]]*ListenAddress[[:space:]]+(127\.0\.0\.1|::1)$" "$conf" 2>/dev/null)"
+    other="$(grep -icE "^[[:space:]]*ListenAddress[[:space:]]+" "$conf" 2>/dev/null)"
+    pw="$(grep -icE "^[[:space:]]*PasswordAuthentication[[:space:]]+yes" "$conf" 2>/dev/null)"
+    gw="$(grep -icE "^[[:space:]]*GatewayPorts[[:space:]]+yes" "$conf" 2>/dev/null)"
     boot="$(ls -A "$HOME/.termux/boot" 2>/dev/null | wc -l)"
     keys="$(wc -l < "$HOME/.ssh/authorized_keys" 2>/dev/null || echo 0)"
-    echo "loopback_listen=$la other_listen=$other password_auth=$pw gateway_ports=$gw boot_scripts=$boot authorized_keys=$keys"
+    echo "loopback_listen=${la:-0} other_listen=${other:-0} password_auth=${pw:-0} gateway_ports=${gw:-0} boot_scripts=${boot:-0} authorized_keys=${keys:-0}"
   ' 2>/dev/null
 }
 

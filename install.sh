@@ -17,6 +17,10 @@
 
 set -uo pipefail
 
+# Print this file's own header comment as the usage text, so it can never
+# drift out of sync with a hard-coded line range.
+usage_from_header() { sed -n '2,/^[^#]/p' "$0" | sed -e 's/^# //' -e 's/^#$//'; }
+
 REPO_URL="https://github.com/dasein108/android-harness.git"
 TARGET_DIR="${AA_DIR:-$HOME/android-harness}"
 BRANCH="main"
@@ -33,7 +37,7 @@ while [ $# -gt 0 ]; do
     --no-claude) PROVISION_ARGS="$PROVISION_ARGS --no-claude"; shift ;;
     --no-shortcuts) PROVISION_ARGS="${PROVISION_ARGS/--shortcuts/}"; shift ;;
     -y|--yes)  ASSUME_YES=1; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) usage_from_header; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done

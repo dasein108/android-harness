@@ -257,6 +257,16 @@ type_into_termux() {
       die "Termux is not in the foreground (resumed: ${fg:-unknown}). Refusing to type into another app." ;;
   esac
 
+  # Open a NEW session before typing. The visible session may be running an
+  # interactive program — an editor, or Claude Code itself — and typing a shell
+  # command into that lands it in the program's prompt, not a shell. Ctrl+Alt+C
+  # is Termux's new-session binding; `input keycombination` needs Android 11+.
+  if adb shell input keycombination KEYCODE_CTRL_LEFT KEYCODE_ALT_LEFT KEYCODE_C >/dev/null 2>&1; then
+    sleep 3
+  else
+    c_dim "note: could not open a new Termux session; typing into the visible one"
+  fi
+
   adb shell input keyevent 67 67 67 67 67 67 67 67   # clear any stray characters
   local first=1 w
   for w in "$@"; do

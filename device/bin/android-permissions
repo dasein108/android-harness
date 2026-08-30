@@ -1,0 +1,158 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# Manage Android permissions from the phone itself, with no computer involved.
+#
+# Two facts shape this command:
+#
+#   1. Termux cannot grant itself anything. `pm grant` throws SecurityException
+#      and there is no `appops` binary here. Only Android Settings can grant, and
+#      that is the point — the agent cannot quietly widen its own reach.
+#   2. Termux cannot read permission state either; `dumpsys` is not available to
+#      an app uid. So state is established by *using* the API and reading the
+#      answer, which is the only honest signal available.
+#
+# What this command can do is take you straight to the right Settings screen.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+# name|probe-command|intrusive|risk|description
+PERM_GROUPS='
+location|termux-location -p network -r last|no|sensitive|GPS and network location (android-location)
+contacts|termux-contact-list|no|sensitive|Read the contact list
+telephony|termux-telephony-deviceinfo|no|sensitive|Phone state and call log
+sms|termux-sms-list -l 1|no|dangerous|Read AND send SMS — sending costs money
+camera|termux-camera-photo -c 0|yes|sensitive|Still capture (android-camera) — probing takes a photo
+microphone|termux-microphone-record -l 1 -f|yes|sensitive|Audio recording — probing records one second
+'
+
+group_field() { printf '%s\n' "$PERM_GROUPS" | awk -F'|' -v n="$1" -v f="$2" '$1==n {print $f; exit}'; }
+group_names() { printf '%s\n' "$PERM_GROUPS" | awk -F'|' 'NF>1 {print $1}'; }
+
+# Termux:API reports a denied permission as a JSON error naming the permission.
+# That string is the only reliable, non-intrusive permission signal we get.
+probe_group() { # probe_group <name> -> granted | denied | unknown
+  local name="$1" cmd out tmp
+  cmd="$(group_field "$name" 2)"
+  # shellcheck disable=SC2086
+  set -- $cmd
+  aa_have "$1" || { echo unknown; return; }
+
+  case "$name" in
+    camera)
+      tmp="$AA_TMP/.perm-probe.$$.jpg"; mkdir -p "$AA_TMP"
+      out="$(timeout 25 "$@" "$tmp" 2>&1)"
+      if printf '%s' "$out" | grep -qi 'grant the following permission'; then echo denied
+      elif [ -s "$tmp" ]; then echo granted
+      else echo unknown; fi   # empty file also means "Termux was in the background"
+      rm -f "$tmp" ;;
+    microphone)
+      tmp="$AA_TMP/.perm-probe.$$.m4a"; mkdir -p "$AA_TMP"
+      out="$(timeout 15 "$@" "$tmp" 2>&1)"
+      timeout 10 termux-microphone-record -q >/dev/null 2>&1
+      if printf '%s' "$out" | grep -qi 'grant the following permission'; then echo denied
+      elif [ -s "$tmp" ]; then echo granted
+      else echo unknown; fi
+      rm -f "$tmp" ;;
+    *)
+      out="$(timeout 20 "$@" 2>&1)"
+      if printf '%s' "$out" | grep -qi 'grant the following permission'; then echo denied
+      elif [ -n "${out//[[:space:]]/}" ]; then echo granted
+      else echo unknown; fi ;;
+  esac
+}
+
+open_settings() { # open_settings [package]
+  local pkg="${1:-com.termux.api}"
+  if am start -a android.settings.APPLICATION_DETAILS_SETTINGS -d "package:$pkg" >/dev/null 2>&1; then
+    echo "opened Settings for $pkg — tap Permissions"
+    return 0
+  fi
+  aa_err "could not open Settings automatically."
+  aa_err "go there by hand: Settings > Apps > ${pkg#com.} > Permissions"
+  return "$AA_EXIT_RUNTIME"
+}
+
+show_table() {
+  cat <<'HEAD'
+Android permissions for Termux:API
+
+Only Android Settings can grant these — Termux cannot grant itself anything, by
+design. This command takes you to the right screen.
+
+  GROUP        RISK       WHAT
+HEAD
+  local n risk desc
+  while read -r n; do
+    [ -n "$n" ] || continue
+    risk="$(group_field "$n" 4)"
+    desc="$(group_field "$n" 5)"
+    printf '  %-12s %-10s %s\n' "$n" "$risk" "$desc"
+  done <<EOF
+$(group_names)
+EOF
+  cat <<'TAIL'
+
+  android-permissions check GROUP    probe one group for real
+  android-permissions open [GROUP]   jump to the Settings screen
+  android-permissions setup          walk through the sensitive ones
+
+State is not listed here because an app uid cannot read it; Android does not
+expose that to us. `check` establishes it by using the API and reading the
+answer. Camera and microphone probes are intrusive (a photo, a one-second
+recording), so they only run when you ask.
+TAIL
+}
+
+case "${1:-show}" in
+  -h|--help)
+    echo "usage: android-permissions [show|check GROUP|open [GROUP]|setup]"; exit 0 ;;
+
+  show) show_table ;;
+
+  check)
+    g="${2:-}"
+    [ -n "$g" ] || aa_usage "android-permissions check GROUP"
+    group_field "$g" 1 >/dev/null || aa_die "$AA_EXIT_USAGE" "unknown group '$g'"
+    [ -n "$(group_field "$g" 1)" ] || aa_die "$AA_EXIT_USAGE" "unknown group '$g' (see: android-permissions)"
+    printf 'probing %s ... ' "$g"
+    st="$(probe_group "$g")"
+    echo "$st"
+    case "$st" in
+      denied)  echo "  grant it in Settings: android-permissions open $g" ; exit "$AA_EXIT_PERMISSION" ;;
+      unknown) echo "  inconclusive — for camera this usually means Termux was not in the foreground" ;;
+    esac ;;
+
+  open)
+    g="${2:-}"
+    if [ -z "$g" ]; then open_settings com.termux.api; exit $?; fi
+    case "$g" in
+      storage|all-files) open_settings com.termux ;;
+      *) [ -n "$(group_field "$g" 1)" ] || aa_die "$AA_EXIT_USAGE" "unknown group '$g'"
+         open_settings com.termux.api ;;
+    esac ;;
+
+  setup)
+    echo "Permission setup. For each group: y opens Settings so you can grant it."
+    echo "Nothing is granted without you tapping it — Termux cannot grant itself"
+    echo "anything, which is why this is a guided walk rather than a script."
+    echo
+    while read -r n; do
+      [ -n "$n" ] || continue
+      printf '\n  %s (%s)\n  %s\n  open Settings for this? [y/N] ' \
+        "$n" "$(group_field "$n" 4)" "$(group_field "$n" 5)"
+      read -r ans </dev/tty || break
+      case "$ans" in
+        y|Y|yes)
+          open_settings com.termux.api
+          printf '  press Enter when you have set it: '
+          read -r _ </dev/tty || true ;;
+      esac
+    done <<EOF
+$(group_names)
+EOF
+    echo
+    echo "Re-probing what changed ..."
+    android-agent-manifest --refresh >/dev/null 2>&1 \
+      && echo "manifest updated: android-agent-manifest" ;;
+
+  *) aa_usage "android-permissions [show|check GROUP|open [GROUP]|setup]" ;;
+esac

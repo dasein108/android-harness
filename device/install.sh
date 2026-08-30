@@ -9,8 +9,11 @@
 # listener, and never installs boot persistence.
 #
 # Usage:
-#   install.sh [--media] [--shortcuts] [--no-claude] [--claude-version X.Y.Z]
-#              [--no-packages]
+#   install.sh [--media] [--shortcuts] [--phone-only] [--no-claude]
+#              [--claude-version X.Y.Z] [--no-packages]
+#
+# --phone-only skips the SSH control channel. Use it when nothing will connect
+# from a computer; there is no point running a listener nobody dials.
 
 set -uo pipefail
 
@@ -25,12 +28,14 @@ WITH_MEDIA=0
 DO_CLAUDE=1
 DO_PACKAGES=1
 DO_SHORTCUTS=0
+PHONE_ONLY=0
 CLAUDE_VERSION="${AA_CLAUDE_VERSION:-latest}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --media) WITH_MEDIA=1; shift ;;
     --shortcuts) DO_SHORTCUTS=1; shift ;;
+    --phone-only) PHONE_ONLY=1; shift ;;
     --no-claude) DO_CLAUDE=0; shift ;;
     --no-packages) DO_PACKAGES=0; shift ;;
     --claude-version) CLAUDE_VERSION="${2:?--claude-version needs a value}"; shift 2 ;;
@@ -421,6 +426,13 @@ fi
 step "SSH control channel"
 # ---------------------------------------------------------------------------
 SSHD_CONF="$PREFIX/etc/ssh/sshd_config"
+if [ "$PHONE_ONLY" -eq 1 ]; then
+  # Nothing will dial in, so do not run a listener at all. The smallest
+  # attack surface is the one that is not there.
+  pkill -x sshd 2>/dev/null && say "   stopped a running sshd"
+  ok "skipped (--phone-only): no control channel, no listener"
+  ok "enable it later with: bash \$SRC/device/install.sh --shortcuts"
+else
 if [ -f "$SSHD_CONF" ]; then
   [ -f "$SSHD_CONF.aa-orig" ] || cp "$SSHD_CONF" "$SSHD_CONF.aa-orig"
   sed -i '/# >>> android-harness >>>/,/# <<< android-harness <<</d' "$SSHD_CONF"
@@ -449,6 +461,8 @@ else
   bad "openssh is not installed; no control channel"
 fi
 
+fi
+
 # ---------------------------------------------------------------------------
 step "Termux:Widget shortcuts"
 # ---------------------------------------------------------------------------
@@ -471,7 +485,9 @@ SC
 
   write_shortcut "claude" 'cd "$AA_ROOT/workspace" && exec claude "$@"'
   write_shortcut "agent-status" 'android-agent-status; printf "\n[enter to close] "; read -r _'
-  write_shortcut "agent-server-start" 'android-agent-server start; printf "\n[enter to close] "; read -r _'
+  # Only useful when a computer will connect; pointless in phone-only mode.
+  [ "$PHONE_ONLY" -eq 1 ] || \
+    write_shortcut "agent-server-start" 'android-agent-server start; printf "\n[enter to close] "; read -r _'
   write_shortcut "agent-test" '"$AA_ROOT/tests/e2e.sh"; printf "\n[enter to close] "; read -r _'
 
   ok "shortcuts in $SHORTCUTS: $(ls "$SHORTCUTS" | tr '\n' ' ')"

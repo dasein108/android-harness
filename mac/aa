@@ -25,6 +25,8 @@ mkdir -p "$STATE_DIR"
 . "$REPO/mac/lib/permissions.sh"
 # shellcheck source=lib/cmd-permissions.sh
 . "$REPO/mac/lib/cmd-permissions.sh"
+# shellcheck source=lib/cmd-policy.sh
+. "$REPO/mac/lib/cmd-policy.sh"
 # shellcheck disable=SC1090
 [ -f "$STATE" ] && . "$STATE"
 AA_USER="${AA_USER:-}"
@@ -121,6 +123,9 @@ aa — Android agent harness control (Mac side, USB only)
 
   aa permissions [show|--pick|--profile NAME|--grant a,b|--revoke a,b]
                              review and change what the agent may do (see --help)
+  aa policy save|check       baseline the device config here, then detect drift
+  aa settings termux-api|termux|apps|privacy|devopts
+                             open the Android screen that owns these controls
   aa grant camera|location   grant an Android runtime permission to Termux:API
   aa grant storage           grant Termux "all files access" (MANAGE_EXTERNAL_STORAGE)
                              (owner-authorized; prints what it changes)
@@ -186,41 +191,7 @@ cmd_bootstrap() {
     || die "adb push failed"
   adb shell rm -f /sdcard/Download/aa-bootstrap.log >/dev/null 2>&1
 
-  # Bring Termux forward. `monkey` is more reliable than `am start` here: an
-  # `am start` can report success while another app stays resumed.
-  adb shell monkey -p com.termux -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
-    || die "could not launch Termux"
-
-  # Never type blind. Keystrokes go to whatever is resumed, so confirm Termux
-  # owns the foreground before sending a single character — otherwise the
-  # command lands in someone's chat app.
-  local fg i
-  for i in $(seq 1 10); do
-    sleep 1
-    fg="$(adb shell dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity | tr -d '\r')"
-    case "$fg" in *com.termux/*) break ;; esac
-  done
-  case "$fg" in
-    *com.termux/*) ;;
-    *) die "Termux is not in the foreground (resumed: ${fg:-unknown}). Refusing to type into another app." ;;
-  esac
-
-  # Termux's terminal takes plain key input. adb's `%s` space escape is not
-  # reliable across Android versions (it can inject stray characters), so send
-  # the space as its own keyevent and keep every `input text` argument
-  # space-free.
-  adb shell input keyevent 67 67 67 67 67 67 67 67   # clear any stray characters
-  adb shell input text 'bash' || die "input failed"
-  adb shell input keyevent 62                        # KEYCODE_SPACE
-  adb shell input text '/sdcard/Download/aa-bootstrap.sh' || die "input failed"
-
-  # Re-check before committing with Enter: an incoming notification or a screen
-  # timeout could have changed the foreground while we were typing.
-  fg="$(adb shell dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity | tr -d '\r')"
-  case "$fg" in
-    *com.termux/*) adb shell input keyevent 66 ;;    # KEYCODE_ENTER
-    *) die "foreground changed to ${fg:-unknown} mid-typing; not pressing Enter" ;;
-  esac
+  type_into_termux 'bash' '/sdcard/Download/aa-bootstrap.sh'
 
   echo -n "waiting for the phone to finish"
   local result=""
@@ -264,6 +235,41 @@ cmd_bootstrap() {
 }
 
 # ---------------------------------------------------------------------------
+# type_into_termux <word> [word...] — send a command to the Termux terminal via
+# adb input. Used when the ssh channel is down and therefore cannot be used to
+# fix itself. Words must be space-free; a KEYCODE_SPACE is sent between them.
+type_into_termux() {
+  adb shell monkey -p com.termux -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+    || die "could not launch Termux"
+
+  # Never type blind: keystrokes go to whatever is resumed.
+  local fg _i
+  for _i in $(seq 1 10); do
+    sleep 1
+    fg="$(adb shell dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity | tr -d '\r')"
+    case "$fg" in *com.termux/*) break ;; esac
+  done
+  case "$fg" in
+    *com.termux/*) ;;
+    *) die "Termux is not in the foreground (resumed: ${fg:-unknown}). Refusing to type into another app." ;;
+  esac
+
+  adb shell input keyevent 67 67 67 67 67 67 67 67   # clear any stray characters
+  local first=1 w
+  for w in "$@"; do
+    [ "$first" -eq 1 ] || adb shell input keyevent 62   # KEYCODE_SPACE
+    first=0
+    adb shell input text "$w" || die "input failed"
+  done
+
+  # Re-check before committing: a notification could have stolen focus.
+  fg="$(adb shell dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity | tr -d '\r')"
+  case "$fg" in
+    *com.termux/*) adb shell input keyevent 66 ;;      # KEYCODE_ENTER
+    *) die "foreground changed to ${fg:-unknown} mid-typing; not pressing Enter" ;;
+  esac
+}
+
 cmd_forward() {
   need adb
   if [ "${1:-}" = "--off" ]; then
@@ -459,6 +465,34 @@ cmd_grant() {
 }
 
 # ---------------------------------------------------------------------------
+cmd_server() {
+  local sub="${1:-status}"
+  ensure_forward
+  # The usual path: over ssh.
+  if dev_ssh 'echo up' >/dev/null 2>&1; then
+    remote_agent "android-agent-server $sub"
+    return $?
+  fi
+  # The channel is down, so it cannot be used to start itself. Fall back to
+  # typing the command into Termux, the same way bootstrap does.
+  case "$sub" in
+    start|restart)
+      c_dim "ssh is down — starting sshd by typing into Termux instead"
+      type_into_termux 'android-agent-server' 'start'
+      local _i
+      for _i in $(seq 1 15); do
+        sleep 2
+        if dev_ssh 'echo up' >/dev/null 2>&1; then
+          c_grn "channel back up"
+          return 0
+        fi
+      done
+      die "sshd did not come back. Open Termux and run: android-agent-server start" ;;
+    *)
+      die "ssh is down. Run 'aa server start', or 'aa bootstrap' if that fails." ;;
+  esac
+}
+
 cmd_report() {
   ensure_forward
   echo "############################################################"
@@ -513,9 +547,11 @@ main() {
     netaudit)  cmd_netaudit ;;
     reset)     ensure_forward
                dev_ssh "bash '$AA_HOME/.android-harness-src/uninstall.sh' ${*:-}" ;;
-    server)    remote_agent "android-agent-server ${*:-status}" ;;
+    server)    cmd_server "$@" ;;
     ui)        cmd_ui "$@" ;;
     permissions|perms) cmd_permissions "$@" ;;
+    policy)    cmd_policy "$@" ;;
+    settings)  cmd_settings "$@" ;;
     grant)     cmd_grant "$@" ;;
     report)    cmd_report "$@" ;;
     *) die "unknown command '$cmd' (aa help)" ;;

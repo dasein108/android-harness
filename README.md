@@ -22,6 +22,7 @@ Verified on a Pixel 7a, Android 17, Termux 0.118.3: Claude Code 2.1.251, Python
 - [Using it on the phone](#using-it-on-the-phone)
 - [Using it from the Mac](#using-it-from-the-mac)
 - [Permissions](#permissions)
+- [Controlling it from the phone](#controlling-it-from-the-phone)
 - [Architecture](#architecture)
 - [Security model](#security-model)
 - [Reset and recovery](#reset-and-recovery)
@@ -293,11 +294,64 @@ aa permissions --disable adb-input     # look at the screen, never type on it
 
 Switched-off features are refused with an explanation, not silently ignored.
 
+### The agent cannot grant itself anything
+
+Worth stating plainly, because it is the property the whole permission model
+rests on. From the Termux uid:
+
+```
+$ pm grant com.termux.api android.permission.RECORD_AUDIO
+java.lang.SecurityException: grantRuntimePermission: Neither user 10337 nor
+current process has android.permission.GRANT_RUNTIME_PERMISSIONS.
+```
+
+Granting needs a system-signed caller. Termux is not one and cannot become one
+without root. So every sensitive Android permission is under your exclusive
+control, whether you set it from `aa permissions` or from Android Settings.
+
 > **Note on `all-files`.** Since Android 11, all-files access still excludes
 > `/Android/data` and `/Android/obb` — no app, no permission, no appop gets in
 > without root. Termux already reaches everything else through legacy storage.
 > On the reference device this grant changed nothing measurable, so `default`
 > leaves it off.
+
+---
+
+## Controlling it from the phone
+
+Everything the agent owns, the agent can rewrite — its own config, shortcuts,
+even `sshd_config`. So the trustworthy controls are the ones owned by someone
+else, and both are usable without a computer:
+
+**Android Settings**, which the agent provably cannot reach:
+
+| screen | what it controls |
+|---|---|
+| Settings → Apps → **Termux:API** → Permissions | camera, location, microphone, contacts, phone, SMS |
+| Settings → Apps → **Termux** → Permissions | storage, all-files access |
+| Settings → Apps → **Termux** → Force stop | stops the agent and its SSH channel now |
+| Settings → **Developer options** → Revoke USB debugging authorisations | cuts the Mac off entirely |
+| Settings → Apps → **Termux** → Battery → Restricted | no background execution at all |
+
+Jump straight there from the Mac with `aa settings termux-api | termux | privacy | devopts`.
+
+**The Mac**, which is not the phone. The host feature switches
+(`state/features.conf`) and the config baseline (`state/policy.sha256`) live
+here, so a compromised phone cannot alter either:
+
+```bash
+aa policy save     # baseline a device you trust
+aa policy check    # detect any drift since — exits non-zero if something moved
+```
+
+`check` hashes `sshd_config`, `~/.bashrc`, `authorized_keys`, every shortcut and
+every agent command, then asserts the invariants: loopback-only listener,
+password auth off, `GatewayPorts` off, no Termux:Boot scripts. Tested against a
+real tamper — flipping `ListenAddress` to `0.0.0.0` is caught by the hash, by the
+invariant, and independently by `android-agent-server`, which refuses to start.
+
+The full reasoning, including why this project installs no accessibility service
+and no helper APK, is in [docs/ON-DEVICE-CONTROL.md](docs/ON-DEVICE-CONTROL.md).
 
 ---
 
@@ -349,6 +403,7 @@ android-harness/
     security/audit.sh       exposure and persistence audit
   docs/
     MAC-AGENT.md            the workflow an LLM agent on the Mac should follow
+    ON-DEVICE-CONTROL.md    controlling the agent with tools it cannot reach
     CLAUDE-CODE.md          how Claude Code is made to run on Termux, and why
 ```
 
@@ -453,6 +508,8 @@ tested, not assumed.
 | Mac cannot ssh in | `aa forward`, then `aa server start`. |
 | `aa server start` refuses | the sshd config no longer binds loopback. That refusal is the safety net working — inspect the config. |
 | `no-external-listener` SKIP | expected. The device cannot enumerate sockets; run `aa netaudit`. |
+| `aa shell` hangs or says the channel is down | Android killed Termux, taking sshd with it. `aa server start` restarts it by typing into Termux over adb; `aa bootstrap` rebuilds the channel from scratch. |
+| `aa policy check` reports drift | something changed a tracked file. If it was you, `aa policy save`. If it was not, read [docs/ON-DEVICE-CONTROL.md](docs/ON-DEVICE-CONTROL.md). |
 | everything is confused | `aa reset --full`, then `aa bootstrap && aa provision`. |
 
 Diagnostics, in order of usefulness:

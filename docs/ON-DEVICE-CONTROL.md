@@ -6,7 +6,8 @@ agent**. So no on-device script, config file or shortcut can be a trustworthy
 control surface: whatever you write there, the agent can rewrite.
 
 What the agent cannot touch is anything owned by a *different* Android user.
-That gives three real control planes, in descending order of strength.
+That gives two real control planes, plus one switch that deliberately gives the
+power away.
 
 ---
 
@@ -37,6 +38,17 @@ become one without root. **Every camera, location, microphone, contacts,
 telephony and SMS permission is therefore already under your exclusive control.**
 The agent can only *ask* — through a Termux:API call that raises an Android
 dialog you answer.
+
+> **One exception, and it is yours to make.** `android-adb enable` pairs the
+> phone with its own adb, which runs as the `shell` uid (2000) — and *that* uid
+> can call `pm grant`. While on-device adb is connected, everything in this
+> section stops being true: the agent can grant itself any of those permissions
+> with no dialog. It is off by default, needs you to type `ENABLE`, and
+> `security/audit.sh` fails for as long as it is on. Verified on hardware:
+> `android-adb shell whoami` → `shell`, uid 2000.
+>
+> If you want the guarantees in this document to hold, keep on-device adb off
+> and use a USB host for screenshots instead.
 
 ### Where to go on the phone
 
@@ -131,7 +143,30 @@ only check in the system the phone cannot influence.
 
 ---
 
-## 3. A separate app — stronger on-device control, with a caveat
+---
+
+## 3. On-device ADB — maximum power, minimum guarantee
+
+`android-adb enable` is the other direction entirely: instead of adding a
+control plane above the agent, it hands the agent shell-uid power. Screenshots
+and UI automation start working on the phone alone, and in exchange the boundary
+in section 1 disappears.
+
+Verified on the reference device: the phone paired with its own adb, took a
+2400x1080 screenshot of itself, drove its own UI, and the manifest grew from 23
+capabilities to 26. Disabling returned it to 23 and the audit to PASS.
+
+Two things to know if you use it:
+
+* **It appears twice.** A phone connected to its own adb shows as both
+  `127.0.0.1:PORT` and `emulator-NNNN`, so a bare `adb shell` fails with "more
+  than one device/emulator". The harness resolves the authorised transport and
+  targets it with `-s`; if you call adb by hand, do the same.
+* **Wireless debugging binds to Wi-Fi, not loopback.** `android-adb disable`
+  drops the connection but deliberately cannot close that port — only you can,
+  in Settings > Developer options. The audit keeps reporting it until you do.
+
+## 4. A separate app — stronger on-device control, with a caveat
 
 If you want on-device control beyond what Settings exposes — appops, disabling
 packages, per-permission auditing without a computer — the usual route is
@@ -147,6 +182,9 @@ Not installed on this phone, and worth thinking about before you do:
   would demolish the boundary the previous two sections rely on.
 - If you install it, **never approve a Shizuku permission request from Termux**.
 - Shizuku needs re-starting after every reboot unless you have root.
+
+Note that on-device adb (section 3) gives the agent the same shell uid Shizuku
+would, so if you have enabled that, this caveat has already applied.
 
 Settings plus `aa policy check` covers everything this project needs. Shizuku is
 worth it only if you want to manage permissions on the phone with no computer
@@ -167,6 +205,9 @@ anywhere in the loop, and are willing to keep that one rule.
 ---
 
 ## Summary
+
+All of the below assume on-device adb is **off**. With it on, the agent holds
+the shell uid and the first four rows no longer hold.
 
 | you want to... | use | agent can interfere? |
 |---|---|---|

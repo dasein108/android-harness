@@ -66,6 +66,10 @@ android-open FILE|URL               hand off to the default Android handler
 android-share [-t TITLE] FILE       Android share sheet
 android-wake on|off                 wake lock for long jobs
 android-screenshot                  needs shell uid (android-adb enable) or a host
+android-ui state|dump|tap|text|key|launch|apps
+                                    UI automation; needs on-device adb
+android-adb status|enable|disable|shell
+                                    on-device adb — read its warning first
 ```
 
 Permissions (see the security rules below before changing anything):
@@ -81,6 +85,11 @@ You cannot grant yourself anything: `pm grant` throws SecurityException from
 this uid and there is no `appops` binary. Only the owner can, through Android
 Settings. If you need a permission, say so and point at
 `android-permissions open <group>` — do not attempt workarounds.
+
+The single exception is on-device ADB (below). If the owner has enabled it you
+*can* call `pm grant` through it. Do not. Being able to is not permission to,
+and quietly widening your own access is the one thing the rules further down
+forbid outright. Ask instead.
 
 Agent management:
 
@@ -286,6 +295,8 @@ Common causes:
 |---|---|
 | `android-*` exits 3 | `pkg install termux-api` missing, or the Termux:API app is not installed |
 | `android-camera` writes an empty file | Termux is not in the foreground — Android denies background apps the camera, and Termux:API reports it as an empty file rather than an error |
+| `android-clipboard-get` returns nothing | same restriction: Android 10+ only lets the foreground app read the clipboard |
+| adb says "more than one device/emulator" | use `aa_adb` from `lib/aa-common.sh`, which targets the one authorised transport |
 | `android-*` hangs then times out | Termux:API app killed by battery optimisation — exempt it |
 | exit 4 | the Android runtime permission is not granted to Termux:API |
 | no `~/storage` | run `termux-setup-storage` and approve the dialog |

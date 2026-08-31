@@ -141,6 +141,22 @@ unavailable report `SKIP` with the reason.
 
 Re-run `./mac/aa test` after each repair rather than assuming the fix took.
 
+## 7b. Baseline the config
+
+The agent on the phone can rewrite its own `sshd_config`, `~/.bashrc` and
+shortcuts — it owns those files. It cannot rewrite the record of what they
+should contain, because that record lives here:
+
+```bash
+./mac/aa policy save     # once, on a device you trust
+./mac/aa policy check    # any time after; non-zero on drift
+```
+
+Also worth knowing before you reach for on-device adb: `android-adb enable` on
+the phone hands the agent the shell uid, which removes the guarantee that it
+cannot grant itself permissions. From a host you do not need it — `aa ui
+screenshot` and `aa permissions --grant` already cover both jobs over USB.
+
 ## 8. Final report
 
 ```bash

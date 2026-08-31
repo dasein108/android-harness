@@ -128,6 +128,10 @@ android-share file.pdf
 android-open https://example.com
 android-wake on / off        # hold a wake lock so doze cannot kill a long job
 
+android-adb status           # is on-device adb on? (off by default)
+android-screenshot           # needs on-device adb, or a USB host
+android-ui state / dump / tap / text / key / launch / apps
+
 ~/android-agent/tests/e2e.sh      # prove it still works
 ~/android-agent/security/audit.sh # prove nothing is exposed
 ```
@@ -187,7 +191,9 @@ bash: appops: command not found
 ```
 
 Only Android Settings can grant, so `android-permissions` takes you there and
-tells you what happened. It cannot read permission state either — `dumpsys` is
+tells you what happened. (The one way to change that is
+[on-device ADB](#optional-on-device-adb-powerful-and-it-costs-you-something),
+which you have to turn on deliberately and which the audit then reports.) It cannot read permission state either — `dumpsys` is
 not available to an app uid — so `check` establishes state by *using* the API
 and reading the error Termux:API returns. Camera and microphone probes are
 intrusive (a photo, a one-second recording) and only run when you ask.
@@ -251,6 +257,22 @@ description of a phone that now trusts its own agent with shell-level power.
 The on-device `CLAUDE.md` tells the agent plainly that being *able* to
 self-grant is not permission to do it.
 
+Verified on the reference device: the phone paired with its own adb, took a
+2400x1080 screenshot of itself, drove its own UI, and the manifest grew from 23
+capabilities to 26 (`screenshot`, `ui-automation`, `adb-shell`). `android-adb
+disable` returned it to 23, one loopback listener, and `SECURITY AUDIT: PASS`.
+
+**Still unverified:** the pairing-code handshake itself. Testing used
+`adb tcpip` from an already-authorised USB host, which exercises everything
+downstream of pairing but not the `adb pair` step or the mDNS port discovery.
+If that part misbehaves, the fallback is the same screen it tells you to open —
+Wireless debugging shows both ports directly.
+
+One quirk worth knowing: a phone connected to its own adb registers **twice**,
+as `127.0.0.1:PORT` and `emulator-NNNN`, so a bare `adb shell` fails with "more
+than one device/emulator". The harness resolves the authorised transport itself;
+your own `adb` calls will need `-s`.
+
 ---
 
 ## What is running, and what is not
@@ -311,6 +333,10 @@ and anything under `$HOME` outside `~/android-agent`.
 | camera writes an empty file | Android blocks the camera for background apps — bring Termux to the foreground |
 | `no ~/storage` | run `termux-setup-storage` and approve the dialog |
 | Claude Code dies mid-task | doze suspended Termux: `android-wake on` first |
+| clipboard test SKIPs | Android 10+ only lets the foreground app read the clipboard — bring Termux forward |
+| `android-screenshot` exits 3 | needs shell uid: `android-adb enable`, or `aa ui screenshot` from a computer |
+| adb says "more than one device/emulator" | a phone on its own adb registers twice (`127.0.0.1:PORT` and `emulator-NNNN`); the harness handles it, but your own `adb` calls need `-s` |
+| audit FAILs on adb | expected while on-device adb is on. `android-adb disable`, then turn Wireless debugging off in Settings |
 
 Diagnostics:
 
@@ -384,7 +410,8 @@ android-harness/
     install.sh              the idempotent provisioner
     uninstall.sh            soft / full reset
     CLAUDE.md               instructions for the agent running on the phone
-    bin/android-*           the Android bridge
+    bin/android-*           the Android bridge (incl. android-permissions,
+                            android-adb, android-ui)
     tests/e2e.sh            functional end-to-end suite
     security/audit.sh       exposure and persistence audit
   mac/aa                    the host CLI

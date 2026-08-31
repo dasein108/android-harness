@@ -1,0 +1,184 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# On-device ADB — the phone talking to itself over Wireless debugging.
+#
+# READ THIS BEFORE ENABLING IT.
+#
+# Everywhere else, this harness relies on one property: the agent runs as an
+# untrusted app uid and therefore cannot grant itself Android permissions.
+# `pm grant` throws SecurityException, there is no `appops` binary, and only you
+# — through Settings — can widen what it reaches.
+#
+# Enabling this destroys that property. adb runs as the `shell` uid (2000), and
+# anything that can talk to adb can:
+#
+#   * grant itself every runtime permission, including camera, microphone,
+#     location, contacts and SMS, with no dialog and no notification;
+#   * read the screen (screencap) and drive the UI (input, uiautomator);
+#   * read /proc/net, install and uninstall packages, and more.
+#
+# It also opens a real network listener. Android's Wireless debugging binds to
+# your Wi-Fi interface, not loopback, so the port is visible to every device on
+# the network. Pairing is required to use it, but the port is open either way.
+#
+# So: this is deliberately not enabled by default, is never enabled by the
+# installer, requires typing a confirmation, and is reported as a finding by
+# security/audit.sh for as long as it is on. That is not the audit being wrong.
+# It is an accurate description of a phone that now trusts its own agent with
+# shell-level power.
+#
+# Turn it off when you are done: android-adb disable
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+STATE_FILE="$AA_CONFIG/adb-enabled"
+
+adb_ready() { aa_have adb && adb shell true >/dev/null 2>&1; }
+
+# Android 11+ randomises both the pairing and the connect port, and re-rolls
+# them every time Wireless debugging is toggled. mDNS is how adb itself finds
+# them, so use that rather than asking the owner to read numbers off a screen.
+mdns_port() { # mdns_port pairing|connect
+  local svc="_adb-tls-connect._tcp"
+  [ "$1" = pairing ] && svc="_adb-tls-pairing._tcp"
+  adb mdns services 2>/dev/null | awk -v s="$svc" '$0 ~ s { n=split($NF,a,":"); print a[n]; exit }'
+}
+
+case "${1:-status}" in
+  -h|--help)
+    echo "usage: android-adb status|enable|disable|shell CMD..."
+    echo
+    echo "  enable   pair this phone with its own adb, over Wireless debugging."
+    echo "           Read the header of this script first: it hands the agent"
+    echo "           shell-level power and opens a network port."
+    echo "  disable  drop the connection and forget the pairing."
+    echo "  shell    run one command as the shell uid."
+    exit 0 ;;
+
+  status)
+    if adb_ready; then
+      echo "on-device adb: CONNECTED (the agent has shell-uid power)"
+      adb devices | sed -n '2,$p' | sed 's/^/  /'
+      echo "  uid: $(adb shell id -u 2>/dev/null) ($(adb shell whoami 2>/dev/null))"
+      echo
+      echo "  unlocked here: screenshots, UI automation, self-granting permissions"
+      echo "  turn it off with: android-adb disable"
+      exit 0
+    fi
+    echo "on-device adb: not connected"
+    aa_have adb || echo "  adb not installed (android-adb enable installs it)"
+    exit 1 ;;
+
+  disable)
+    if aa_have adb; then
+      adb disconnect >/dev/null 2>&1
+      adb kill-server >/dev/null 2>&1
+    fi
+    rm -f "$STATE_FILE"
+    aa_log adb "on-device adb disabled"
+    echo "adb disconnected and the server stopped."
+    echo
+    echo "Now turn the listener off too — that part is yours, not mine:"
+    echo "  Settings > Developer options > Wireless debugging > off"
+    echo
+    echo "Until you do, the port stays open on your Wi-Fi."
+    android-agent-manifest --refresh >/dev/null 2>&1
+    exit 0 ;;
+
+  shell)
+    shift
+    [ $# -gt 0 ] || aa_usage "android-adb shell COMMAND..."
+    adb_ready || aa_die "$AA_EXIT_UNAVAILABLE" "on-device adb is not connected (android-adb enable)"
+    adb shell "$@" ;;
+
+  enable) ;;
+  *) aa_usage "android-adb status|enable|disable|shell CMD..." ;;
+esac
+
+# --- enable ----------------------------------------------------------------
+if adb_ready; then
+  echo "already connected."
+  exec "$0" status
+fi
+
+cat <<'WARN'
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  This gives the agent shell-uid power over your phone.               │
+  │                                                                      │
+  │  After this, the agent CAN:                                          │
+  │    - grant itself camera, mic, location, contacts, SMS — no dialog   │
+  │    - read your screen and drive the UI                               │
+  │    - install and uninstall packages                                  │
+  │                                                                      │
+  │  It also opens an adb port on your Wi-Fi, not just loopback.         │
+  │                                                                      │
+  │  The audit will report this as a finding for as long as it is on.    │
+  └──────────────────────────────────────────────────────────────────────┘
+
+WARN
+printf 'type ENABLE to continue, anything else to stop: '
+read -r confirm </dev/tty || exit 1
+[ "$confirm" = ENABLE ] || { echo "stopped. Nothing changed."; exit 0; }
+
+if ! aa_have adb; then
+  echo "-- installing android-tools (provides adb)"
+  pkg install -y android-tools >/dev/null 2>&1 \
+    || aa_die "$AA_EXIT_RUNTIME" "could not install android-tools"
+fi
+
+cat <<'STEPS'
+
+On the phone, now:
+
+  1. Settings > System > Developer options > Wireless debugging  -> ON
+  2. Tap "Pair device with pairing code"
+  3. Leave that dialog open — it shows a 6-digit code
+
+STEPS
+printf 'pairing code from that dialog: '
+read -r code </dev/tty || exit 1
+case "$code" in
+  ''|*[!0-9]*) aa_die "$AA_EXIT_USAGE" "that is not a 6-digit code" ;;
+esac
+
+adb start-server >/dev/null 2>&1
+echo "-- looking for the pairing port over mDNS"
+pair_port="$(mdns_port pairing)"
+if [ -z "$pair_port" ]; then
+  echo "   mDNS found nothing. The pairing dialog shows 'IP address & Port'."
+  printf '   pairing port (the number after the colon): '
+  read -r pair_port </dev/tty || exit 1
+fi
+case "$pair_port" in ''|*[!0-9]*) aa_die "$AA_EXIT_USAGE" "invalid pairing port" ;; esac
+
+echo "-- pairing with 127.0.0.1:$pair_port"
+if ! adb pair "127.0.0.1:$pair_port" "$code" 2>&1 | tee /dev/stderr | grep -q "Successfully paired"; then
+  aa_die "$AA_EXIT_RUNTIME" "pairing failed — the code expires fast, so try again"
+fi
+
+echo "-- looking for the connect port"
+conn_port="$(mdns_port connect)"
+if [ -z "$conn_port" ]; then
+  echo "   The Wireless debugging screen itself shows 'IP address & Port'."
+  printf '   connect port: '
+  read -r conn_port </dev/tty || exit 1
+fi
+case "$conn_port" in ''|*[!0-9]*) aa_die "$AA_EXIT_USAGE" "invalid connect port" ;; esac
+
+adb connect "127.0.0.1:$conn_port" >/dev/null 2>&1
+sleep 2
+
+if ! adb_ready; then
+  aa_die "$AA_EXIT_RUNTIME" "connected but 'adb shell' does not work — check Wireless debugging is still on"
+fi
+
+date -u '+%Y-%m-%dT%H:%M:%SZ' > "$STATE_FILE"
+chmod 600 "$STATE_FILE"
+aa_log adb "on-device adb ENABLED — agent now has shell-uid power"
+
+echo
+echo "connected. The agent now has shell-uid power on this phone."
+echo "  screenshots:    android-screenshot"
+echo "  UI automation:  android-ui tap|text|key|dump|launch"
+echo "  turn it off:    android-adb disable"
+android-agent-manifest --refresh >/dev/null 2>&1

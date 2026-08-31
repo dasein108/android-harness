@@ -65,7 +65,7 @@ android-brightness 0-255|auto
 android-open FILE|URL               hand off to the default Android handler
 android-share [-t TITLE] FILE       Android share sheet
 android-wake on|off                 wake lock for long jobs
-android-screenshot                  NOT available on-device — see UI automation
+android-screenshot                  needs shell uid (android-adb enable) or a host
 ```
 
 Permissions (see the security rules below before changing anything):
@@ -163,6 +163,30 @@ claude --version          # expect: 2.1.251 (Claude Code) or later
 ```
 
 ---
+
+## On-device ADB — off by default, and the audit will flag it
+
+`android-adb enable` pairs this phone with its own adb over Wireless debugging.
+It is off unless the owner turned it on. When it is on:
+
+```
+android-adb status            is it connected, and as which uid
+android-screenshot            works (screencap through adb)
+android-ui tap|text|key|dump|launch|state|apps
+android-adb shell CMD         run one command as the shell uid
+android-adb disable           give the power back
+```
+
+Understand what it means before using it. With adb connected you *can* grant
+yourself camera, microphone, location, contacts and SMS with no dialog. **Do
+not.** The owner enabling adb so you can take a screenshot is not permission to
+widen your own reach — if you need a permission, ask, and point at
+`android-permissions open <group>`. Self-granting is exactly the "quietly widen
+its own access" behaviour the security rules below forbid, and it is now
+technically possible rather than blocked, which makes restraint your job.
+
+Wireless debugging also opens a port on the owner's Wi-Fi. If you were asked to
+do something quick, offer `android-adb disable` when you are finished.
 
 ## Screenshots and UI automation
 

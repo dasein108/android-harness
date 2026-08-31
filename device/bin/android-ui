@@ -1,0 +1,92 @@
+#!/data/data/com.termux/files/usr/bin/env bash
+# UI automation from the phone itself.
+#
+# Needs on-device adb (`android-adb enable`). Without it none of this is
+# reachable from an app uid: `input`, `uiautomator` and `screencap` all live in
+# the shell/system domain, and Termux:API bridges none of them.
+#
+# There is no accessibility service here and no helper APK. If on-device adb is
+# off, these commands say so and stop.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
+
+need_adb() {
+  if ! aa_have adb || ! adb shell true >/dev/null 2>&1; then
+    aa_err "error: UI automation needs on-device adb, which is not connected."
+    aa_err "hint:  android-adb enable   (read what it warns about first)"
+    exit "$AA_EXIT_UNAVAILABLE"
+  fi
+}
+
+sub="${1:-}"; shift 2>/dev/null || true
+
+case "$sub" in
+  -h|--help|"")
+    cat <<'USAGE'
+usage: android-ui SUBCOMMAND
+
+  state              foreground activity, screen and lock state
+  dump [OUT.xml]     uiautomator view hierarchy
+  tap X Y
+  swipe X1 Y1 X2 Y2 [MS]
+  text "some text"   type into the focused field
+  key KEYCODE        BACK | HOME | ENTER | TAB | ...
+  launch PACKAGE
+  apps [FILTER]      installed third-party packages
+
+Requires on-device adb: android-adb enable
+USAGE
+    exit 0 ;;
+esac
+
+need_adb
+
+case "$sub" in
+  state)
+    echo "foreground:"
+    adb shell dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity | sed 's/^ */  /'
+    echo "display:"
+    adb shell dumpsys power 2>/dev/null | grep -m1 'mWakefulness=' | sed 's/^ */  /'
+    adb shell dumpsys window 2>/dev/null | grep -m1 isKeyguardShowing | sed 's/^ */  /'
+    echo "size:"
+    adb shell wm size 2>/dev/null | sed 's/^/  /' ;;
+
+  dump)
+    out="${1:-}"
+    xml="$(adb exec-out uiautomator dump /dev/tty 2>/dev/null | sed 's/UI hierchary dumped to: \/dev\/tty//')"
+    [ -n "$xml" ] || aa_die "$AA_EXIT_RUNTIME" "uiautomator dump failed"
+    if [ -n "$out" ]; then printf '%s\n' "$xml" > "$out"; echo "$out"; else printf '%s\n' "$xml"; fi ;;
+
+  tap)
+    [ $# -eq 2 ] || aa_usage "android-ui tap X Y"
+    adb shell input tap "$1" "$2" || aa_die "$AA_EXIT_RUNTIME" "tap failed"
+    aa_log ui "tap $1 $2" ;;
+
+  swipe)
+    [ $# -ge 4 ] || aa_usage "android-ui swipe X1 Y1 X2 Y2 [MS]"
+    adb shell input swipe "$@" || aa_die "$AA_EXIT_RUNTIME" "swipe failed" ;;
+
+  text)
+    [ $# -ge 1 ] || aa_usage 'android-ui text "some text"'
+    # `input text` takes %s for a space and cannot carry newlines.
+    adb shell input text "$(printf '%s' "$*" | sed 's/ /%s/g')" \
+      || aa_die "$AA_EXIT_RUNTIME" "text input failed" ;;
+
+  key)
+    [ $# -ge 1 ] || aa_usage "android-ui key KEYCODE"
+    adb shell input keyevent "$@" || aa_die "$AA_EXIT_RUNTIME" "keyevent failed" ;;
+
+  launch)
+    [ $# -eq 1 ] || aa_usage "android-ui launch PACKAGE"
+    adb shell monkey -p "$1" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+      && echo "launched $1" || aa_die "$AA_EXIT_RUNTIME" "could not launch $1" ;;
+
+  apps)
+    if [ -n "${1:-}" ]; then
+      adb shell pm list packages -3 | tr -d '\r' | sed 's/^package://' | sort | grep -i -- "$1"
+    else
+      adb shell pm list packages -3 | tr -d '\r' | sed 's/^package://' | sort
+    fi ;;
+
+  *) aa_usage "android-ui state|dump|tap|swipe|text|key|launch|apps" ;;
+esac

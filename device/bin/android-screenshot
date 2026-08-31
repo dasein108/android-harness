@@ -1,32 +1,41 @@
 #!/data/data/com.termux/files/usr/bin/env bash
 # Screen capture.
 #
-# Honest capability note: an unrooted Android device gives Termux no way to
-# capture the screen. `screencap` lives in the shell/system domain, and
-# Termux:API exposes no MediaProjection bridge. So this command is a stub that
-# fails loudly with the working alternative rather than pretending.
+# An app uid cannot do this on its own: `screencap` lives in the shell/system
+# domain and Termux:API exposes no MediaProjection bridge. There are two ways to
+# get it, and this command uses whichever is available:
 #
-# The real implementation lives on the Mac side: `aa ui screenshot`, which uses
-# `adb exec-out screencap -p` over the USB channel.
+#   1. on-device adb   — `android-adb enable`, then screencap runs as shell uid
+#   2. a host over USB — `aa ui screenshot` on the connected computer
+#
+# With neither, it fails loudly rather than pretending.
 set -uo pipefail
 . "$(dirname "$(readlink -f "$0")")/../lib/aa-common.sh"
 
 case "${1:-}" in
-  -h|--help) echo "usage: android-screenshot [OUTPUT.png]   (host-side only; see message)"; exit 0 ;;
+  -h|--help) echo "usage: android-screenshot [OUTPUT.png]"; exit 0 ;;
 esac
 
-if command -v screencap >/dev/null 2>&1; then
-  out="${1:-$AA_ROOT/output/screen-$(date '+%Y%m%d-%H%M%S').png}"
-  mkdir -p "$(dirname "$out")"
-  if screencap -p "$out" 2>/dev/null && [ -s "$out" ]; then
+out="${1:-}"
+if [ -z "$out" ]; then
+  mkdir -p "$AA_ROOT/output"
+  out="$AA_ROOT/output/screen-$(date '+%Y%m%d-%H%M%S').png"
+fi
+case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
+mkdir -p "$(dirname "$out")"
+
+if aa_have adb && adb shell true >/dev/null 2>&1; then
+  if adb exec-out screencap -p > "$out" 2>/dev/null && [ -s "$out" ]; then
+    aa_log screenshot "captured $out"
     printf '%s\n' "$out"
     exit 0
   fi
   rm -f "$out"
+  aa_die "$AA_EXIT_RUNTIME" "screencap ran through adb but produced nothing"
 fi
 
-aa_err "error: screen capture is not available from inside Termux on an unrooted device."
-aa_err "hint:  run it from the Mac over the USB channel instead:"
-aa_err "         aa ui screenshot [OUTPUT.png]"
-aa_err "       (equivalently: adb exec-out screencap -p > shot.png)"
+rm -f "$out" 2>/dev/null
+aa_err "error: screen capture needs shell-level access, which this uid does not have."
+aa_err "hint:  on the phone   — android-adb enable   (read its warning first)"
+aa_err "hint:  from a computer — aa ui screenshot"
 exit "$AA_EXIT_UNAVAILABLE"

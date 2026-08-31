@@ -119,10 +119,17 @@ else
   add_note location "location permission not granted to Termux:API, or no last-known fix"
 fi
 
-# Screen capture and UI automation are host-side capabilities on an unrooted
-# device. They are recorded as such rather than claimed here.
-add_note screenshot "host-side only: aa ui screenshot (adb exec-out screencap)"
-add_note ui-automation "host-side only: aa ui tap/text/key/dump (adb input + uiautomator)"
+# Screen capture and UI automation need shell-uid access. That is available
+# either from a host over USB, or on-device once `android-adb enable` has paired
+# the phone with its own adb — which is powerful enough that the audit reports it.
+if aa_have adb && adb shell true >/dev/null 2>&1; then
+  add_cap screenshot
+  add_cap ui-automation
+  add_cap adb-shell
+else
+  add_note screenshot "needs shell uid: android-adb enable, or aa ui screenshot from a host"
+  add_note ui-automation "needs shell uid: android-adb enable, or aa ui ... from a host"
+fi
 
 # --- emit ------------------------------------------------------------------
 caps_json=""

@@ -14,7 +14,9 @@ bash install.sh
 
 Verified on a Pixel 7a, Android 17, Termux 0.118.3: Claude Code 2.1.251, Python
 3.14.6, Node v24.18.0, 23 capabilities, 23/23 checks passing, `SECURITY AUDIT:
-PASS`, and **zero listening sockets**.
+PASS`, and **zero listening sockets** — unless you opt into
+[on-device ADB](#optional-on-device-adb-powerful-and-it-costs-you-something),
+which trades exactly that away for screenshots and UI automation.
 
 ---
 
@@ -24,6 +26,7 @@ PASS`, and **zero listening sockets**.
 - [Install](#install)
 - [Daily use](#daily-use)
 - [Permissions](#permissions)
+- [Optional: on-device ADB](#optional-on-device-adb-powerful-and-it-costs-you-something)
 - [What is running, and what is not](#what-is-running-and-what-is-not)
 - [Reset](#reset)
 - [Troubleshooting](#troubleshooting)
@@ -212,6 +215,41 @@ All in Android Settings, all on your phone:
 | Apps → **Termux** → Permissions | storage, all-files access |
 | Apps → **Termux** → **Force stop** | stops the agent immediately |
 | Apps → **Termux** → Battery → Restricted | no background execution at all |
+
+---
+
+## Optional: on-device ADB (powerful, and it costs you something)
+
+Screenshots and UI automation need shell-uid access, which an app uid does not
+have. You can grant it on the phone alone by pairing it with its own adb:
+
+```bash
+android-adb enable      # walks you through Wireless debugging pairing
+android-screenshot
+android-ui tap 540 715
+android-ui dump
+android-adb disable     # when you are done
+```
+
+**Read what this costs.** Everywhere else, this project leans on one property:
+the agent cannot grant itself Android permissions. `pm grant` throws
+`SecurityException` and only Settings can widen its reach. Enabling on-device
+adb removes that. With adb connected the agent *can* grant itself camera,
+microphone, location, contacts and SMS with no dialog and no notification. It
+can also read the screen, drive the UI, and install packages.
+
+It opens a real network port too: Android's Wireless debugging binds to your
+Wi-Fi interface, not loopback. Pairing is required to use it — but the port is
+open regardless, and it stays open until you turn Wireless debugging off in
+Settings.
+
+So it is off by default, never enabled by the installer, requires typing
+`ENABLE` to confirm, and **`security/audit.sh` reports it as a finding for as
+long as it is on**. That is not a bug in the audit. It is an accurate
+description of a phone that now trusts its own agent with shell-level power.
+
+The on-device `CLAUDE.md` tells the agent plainly that being *able* to
+self-grant is not permission to do it.
 
 ---
 

@@ -188,7 +188,13 @@ sec "On-device ADB"
 # If the phone is paired with its own adb, the agent has shell-uid power: it can
 # grant itself any permission, read the screen and drive the UI. That is a
 # deliberate, owner-enabled state, but it is never a quiet one.
-ADB_SERIAL="$(command -v adb >/dev/null 2>&1 && adb devices 2>/dev/null | awk '$2=="device" {print $1; exit}')"
+# Only probe adb when the owner actually enabled it. `adb devices` forks a
+# server that listens on 127.0.0.1:5037, so an unconditional probe here would
+# make the audit create the very kind of thing it exists to find.
+ADB_SERIAL=""
+if [ -f "$AA_ROOT/config/adb-enabled" ] && command -v adb >/dev/null 2>&1; then
+  ADB_SERIAL="$(adb devices 2>/dev/null | awk '$2=="device" {print $1; exit}')"
+fi
 if [ -n "$ADB_SERIAL" ]; then
   flag "on-device ADB is CONNECTED — the agent has shell-uid power (grant itself any permission, read the screen, drive the UI). Disable with: android-adb disable"
   line "  adb devices:"

@@ -34,10 +34,15 @@ STATE_FILE="$AA_CONFIG/adb-enabled"
 
 adb_ready() { aa_have adb && aa_adb_ready; }
 
-# Android 11+ randomises both the pairing and the connect port, and re-rolls
-# them every time Wireless debugging is toggled. mDNS is how adb itself finds
-# them, so use that rather than asking the owner to read numbers off a screen.
-mdns_port() { # mdns_port pairing|connect
+# Android 11+ randomises both the pairing and the connect port and re-rolls them
+# every time Wireless debugging is toggled, so they have to be read at pairing
+# time. Desktop adb can discover them over mDNS; Termux's cannot — its build
+# answers `adb mdns services` with "unknown host service", so there is nothing
+# to fall back from. Both ports are on screen anyway, so we ask.
+mdns_supported() { adb mdns check >/dev/null 2>&1; }
+
+mdns_port() { # mdns_port pairing|connect  -> empty when unsupported
+  mdns_supported || return 0
   local svc="_adb-tls-connect._tcp"
   [ "$1" = pairing ] && svc="_adb-tls-pairing._tcp"
   adb mdns services 2>/dev/null | awk -v s="$svc" '$0 ~ s { n=split($NF,a,":"); print a[n]; exit }'
@@ -132,7 +137,10 @@ On the phone, now:
 
   1. Settings > System > Developer options > Wireless debugging  -> ON
   2. Tap "Pair device with pairing code"
-  3. Leave that dialog open — it shows a 6-digit code
+  3. Leave that dialog open — it shows a 6-digit code AND a port
+
+     The code expires in about a minute, so have the dialog open before you
+     answer the next prompt.
 
 STEPS
 printf 'pairing code from that dialog: '
@@ -142,10 +150,10 @@ case "$code" in
 esac
 
 adb start-server >/dev/null 2>&1
-echo "-- looking for the pairing port over mDNS"
 pair_port="$(mdns_port pairing)"
 if [ -z "$pair_port" ]; then
-  echo "   mDNS found nothing. The pairing dialog shows 'IP address & Port'."
+  echo
+  echo "   The pairing dialog shows 'IP address & Port' as 192.168.x.x:NNNNN."
   printf '   pairing port (the number after the colon): '
   read -r pair_port </dev/tty || exit 1
 fi
@@ -156,10 +164,11 @@ if ! adb pair "127.0.0.1:$pair_port" "$code" 2>&1 | tee /dev/stderr | grep -q "S
   aa_die "$AA_EXIT_RUNTIME" "pairing failed — the code expires fast, so try again"
 fi
 
-echo "-- looking for the connect port"
 conn_port="$(mdns_port connect)"
 if [ -z "$conn_port" ]; then
-  echo "   The Wireless debugging screen itself shows 'IP address & Port'."
+  echo
+  echo "   Close the pairing dialog. The Wireless debugging screen itself shows"
+  echo "   a different 'IP address & Port' — that one is the connect port."
   printf '   connect port: '
   read -r conn_port </dev/tty || exit 1
 fi
@@ -168,12 +177,18 @@ case "$conn_port" in ''|*[!0-9]*) aa_die "$AA_EXIT_USAGE" "invalid connect port"
 adb connect "127.0.0.1:$conn_port" >/dev/null 2>&1
 sleep 2
 
-if ! adb_ready; then
-  aa_die "$AA_EXIT_RUNTIME" "connected but 'adb shell' does not work — check Wireless debugging is still on"
-fi
-
+# The marker has to exist before the check, not after: aa_adb_ready refuses to
+# touch adb without it, precisely so that capability probes cannot start a
+# daemon. Write it first, and take it back if the connection does not work.
+mkdir -p "$AA_CONFIG"
 date -u '+%Y-%m-%dT%H:%M:%SZ' > "$STATE_FILE"
 chmod 600 "$STATE_FILE"
+AA_ADB_SERIAL=""
+
+if ! adb_ready; then
+  rm -f "$STATE_FILE"
+  aa_die "$AA_EXIT_RUNTIME" "paired, but 'adb shell' does not work. Check the connect port on the Wireless debugging screen — it differs from the pairing port and changes when the toggle is cycled."
+fi
 aa_log adb "on-device adb ENABLED — agent now has shell-uid power"
 
 echo

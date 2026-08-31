@@ -164,7 +164,8 @@ sec "Outbound / callback patterns in agent scripts"
 if [ -d "$AA_ROOT" ]; then
   # --exclude this script: an auditor that greps for these patterns necessarily
   # contains them, and matching itself would make every run fail.
-  HITS="$(grep -rnI --exclude="$SELF_NAME" -E 'curl[^|]*\|[[:space:]]*(ba)?sh|wget[^|]*\|[[:space:]]*(ba)?sh|nc[[:space:]].*-e[[:space:]]|/dev/tcp/|ngrok|localtunnel|serveo|upnp|tor(socks)?[[:space:]]' \
+  # \b around tor matters: without it, "uiautomator dump" matches "tor ".
+  HITS="$(grep -rnI --exclude="$SELF_NAME" -E 'curl[^|]*\|[[:space:]]*(ba)?sh|wget[^|]*\|[[:space:]]*(ba)?sh|nc[[:space:]].*-e[[:space:]]|/dev/tcp/|ngrok|localtunnel|serveo|upnp|\b(tor|torsocks)\b' \
     "$AA_ROOT/bin" "$AA_ROOT/scripts" "$AA_ROOT/tests" "$AA_ROOT/security" 2>/dev/null || true)"
   if [ -n "$HITS" ]; then
     flag "download-and-execute or tunnelling pattern in agent scripts"
@@ -187,11 +188,12 @@ sec "On-device ADB"
 # If the phone is paired with its own adb, the agent has shell-uid power: it can
 # grant itself any permission, read the screen and drive the UI. That is a
 # deliberate, owner-enabled state, but it is never a quiet one.
-if command -v adb >/dev/null 2>&1 && adb shell true >/dev/null 2>&1; then
+ADB_SERIAL="$(command -v adb >/dev/null 2>&1 && adb devices 2>/dev/null | awk '$2=="device" {print $1; exit}')"
+if [ -n "$ADB_SERIAL" ]; then
   flag "on-device ADB is CONNECTED — the agent has shell-uid power (grant itself any permission, read the screen, drive the UI). Disable with: android-adb disable"
   line "  adb devices:"
   adb devices 2>/dev/null | sed -n '2,$p' | sed 's/^/    /' | while read -r l; do line "$l"; done
-  line "  running as uid $(adb shell id -u 2>/dev/null) ($(adb shell whoami 2>/dev/null))"
+  line "  running as uid $(adb -s "$ADB_SERIAL" shell id -u 2>/dev/null) ($(adb -s "$ADB_SERIAL" shell whoami 2>/dev/null))"
 elif command -v adb >/dev/null 2>&1; then
   line "  adb is installed but not connected — no shell-uid access"
 else
@@ -201,7 +203,8 @@ fi
 # Wireless debugging binds to the Wi-Fi interface, not loopback, so the port is
 # reachable by anything on the same network even when adb here is disconnected.
 WDBG="$(getprop service.adb.tcp.port 2>/dev/null)"
-if [ -n "$WDBG" ] && [ "$WDBG" != "-1" ]; then
+# The prop is "0" when TCP mode is off, "-1" on some builds, and empty on others.
+if [ -n "$WDBG" ] && [ "$WDBG" != "-1" ] && [ "$WDBG" != "0" ]; then
   flag "Wireless debugging is ON (adb port $WDBG, bound to the network interface, not loopback). Turn it off in Settings > Developer options when you are done."
 else
   line "  Wireless debugging: off"
@@ -288,7 +291,8 @@ SHARED STORAGE:
 $SHARED
 
 UI AUTOMATION:
-$(if command -v adb >/dev/null 2>&1 && adb shell true >/dev/null 2>&1; then
+$(ADB_SERIAL="$(command -v adb >/dev/null 2>&1 && adb devices 2>/dev/null | awk '$2=="device" {print $1; exit}')"
+if [ -n "$ADB_SERIAL" ]; then
     echo "ON-DEVICE, via adb paired to this phone. The agent has shell-uid power."
     echo "This is powerful and deliberate; disable with: android-adb disable"
   else

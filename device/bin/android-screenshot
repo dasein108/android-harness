@@ -24,8 +24,8 @@ fi
 case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
 mkdir -p "$(dirname "$out")"
 
-if aa_have adb && adb shell true >/dev/null 2>&1; then
-  if adb exec-out screencap -p > "$out" 2>/dev/null && [ -s "$out" ]; then
+if aa_have adb && aa_adb_ready; then
+  if aa_adb exec-out screencap -p > "$out" 2>/dev/null && [ -s "$out" ]; then
     aa_log screenshot "captured $out"
     printf '%s\n' "$out"
     exit 0

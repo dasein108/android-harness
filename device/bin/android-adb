@@ -32,7 +32,7 @@ set -uo pipefail
 
 STATE_FILE="$AA_CONFIG/adb-enabled"
 
-adb_ready() { aa_have adb && adb shell true >/dev/null 2>&1; }
+adb_ready() { aa_have adb && aa_adb_ready; }
 
 # Android 11+ randomises both the pairing and the connect port, and re-rolls
 # them every time Wireless debugging is toggled. mDNS is how adb itself finds
@@ -58,7 +58,7 @@ case "${1:-status}" in
     if adb_ready; then
       echo "on-device adb: CONNECTED (the agent has shell-uid power)"
       adb devices | sed -n '2,$p' | sed 's/^/  /'
-      echo "  uid: $(adb shell id -u 2>/dev/null) ($(adb shell whoami 2>/dev/null))"
+      echo "  uid: $(aa_adb shell id -u 2>/dev/null) ($(aa_adb shell whoami 2>/dev/null))"
       echo
       echo "  unlocked here: screenshots, UI automation, self-granting permissions"
       echo "  turn it off with: android-adb disable"
@@ -88,7 +88,7 @@ case "${1:-status}" in
     shift
     [ $# -gt 0 ] || aa_usage "android-adb shell COMMAND..."
     adb_ready || aa_die "$AA_EXIT_UNAVAILABLE" "on-device adb is not connected (android-adb enable)"
-    adb shell "$@" ;;
+    aa_adb shell "$@" ;;
 
   enable) ;;
   *) aa_usage "android-adb status|enable|disable|shell CMD..." ;;

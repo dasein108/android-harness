@@ -122,7 +122,7 @@ fi
 # Screen capture and UI automation need shell-uid access. That is available
 # either from a host over USB, or on-device once `android-adb enable` has paired
 # the phone with its own adb — which is powerful enough that the audit reports it.
-if aa_have adb && adb shell true >/dev/null 2>&1; then
+if aa_have adb && aa_adb_ready; then
   add_cap screenshot
   add_cap ui-automation
   add_cap adb-shell

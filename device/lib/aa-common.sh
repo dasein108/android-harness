@@ -93,6 +93,30 @@ aa_run_api() {
   return 0
 }
 
+# --- on-device adb -----------------------------------------------------------
+# When the phone is paired with its own adb it shows up twice: once as
+# 127.0.0.1:PORT and once as emulator-NNNN, because adb aliases loopback ports
+# into the emulator namespace. A bare `adb shell` then fails with "more than one
+# device/emulator", so always target the one authorised transport explicitly.
+AA_ADB_SERIAL=""
+
+aa_adb_serial() {
+  [ -n "$AA_ADB_SERIAL" ] && { printf '%s' "$AA_ADB_SERIAL"; return 0; }
+  aa_have adb || return 1
+  AA_ADB_SERIAL="$(adb devices 2>/dev/null | awk '$2=="device" {print $1; exit}')"
+  [ -n "$AA_ADB_SERIAL" ] || return 1
+  printf '%s' "$AA_ADB_SERIAL"
+}
+
+aa_adb() {
+  local s
+  s="$(aa_adb_serial)" || return 1
+  adb -s "$s" "$@"
+}
+
+# True only when adb can actually run a command as the shell uid.
+aa_adb_ready() { aa_adb shell true >/dev/null 2>&1; }
+
 # aa_secret_guard <text> — refuse to print blobs that look like private key
 # material. Cheap belt-and-braces so a clipboard dump never lands in a log.
 aa_secret_guard() {

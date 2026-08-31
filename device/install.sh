@@ -424,11 +424,31 @@ step "SSH control channel"
 # ---------------------------------------------------------------------------
 SSHD_CONF="$PREFIX/etc/ssh/sshd_config"
 if [ "$PHONE_ONLY" -eq 1 ]; then
-  # Nothing will dial in, so do not run a listener at all. The smallest
-  # attack surface is the one that is not there.
+  # Nothing will dial in, so do not run a listener at all. The smallest attack
+  # surface is the one that is not there.
   pkill -x sshd 2>/dev/null && say "   stopped a running sshd"
+
+  # Still pin the config, even though sshd is not started. A stock sshd_config
+  # has no ListenAddress, so anything that later starts sshd — a stray command,
+  # a package hook — would bind every interface. Writing the loopback block now
+  # makes that failure mode safe instead of merely unlikely.
+  if [ -f "$SSHD_CONF" ]; then
+    [ -f "$SSHD_CONF.aa-orig" ] || cp "$SSHD_CONF" "$SSHD_CONF.aa-orig"
+    sed -i '/# >>> android-harness >>>/,/# <<< android-harness <<</d' "$SSHD_CONF"
+    cat >> "$SSHD_CONF" <<'CONF'
+# >>> android-harness >>>
+# Loopback only. Nothing starts sshd in phone-only mode, but if anything ever
+# does, it must not bind a public interface.
+ListenAddress 127.0.0.1
+Port 8022
+PasswordAuthentication no
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+# <<< android-harness <<<
+CONF
+    ok "sshd not started; config pinned to loopback in case anything starts it"
+  fi
   ok "skipped (--phone-only): no control channel, no listener"
-  ok "enable it later with: bash \$SRC/device/install.sh --shortcuts"
 else
 if [ -f "$SSHD_CONF" ]; then
   [ -f "$SSHD_CONF.aa-orig" ] || cp "$SSHD_CONF" "$SSHD_CONF.aa-orig"

@@ -297,7 +297,8 @@ Common causes:
 | `android-camera` writes an empty file | Termux is not in the foreground — Android denies background apps the camera, and Termux:API reports it as an empty file rather than an error |
 | `android-clipboard-get` returns nothing | same restriction: Android 10+ only lets the foreground app read the clipboard |
 | adb says "more than one device/emulator" | use `aa_adb` from `lib/aa-common.sh`, which targets the one authorised transport |
-| `android-*` hangs then times out | Termux:API app killed by battery optimisation — exempt it |
+| `android-*` hangs then times out | Termux:API app killed by battery optimisation — exempt it. Samsung and Xiaomi are far more aggressive than Pixel |
+| a long job's child processes disappear | Android 12+ phantom process killer. Keep the process tree small, or ask the owner about `android-adb enable` |
 | exit 4 | the Android runtime permission is not granted to Termux:API |
 | no `~/storage` | run `termux-setup-storage` and approve the dialog |
 | `claude` not found after install | `~/android-agent/node/bin` missing from PATH — re-source `config/environment` |

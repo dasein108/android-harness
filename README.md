@@ -12,7 +12,7 @@ less install.sh          # read it before running it
 bash install.sh
 ```
 
-Verified on a Pixel 7a, Android 17, Termux 0.118.3: Claude Code 2.1.251, Python
+Verified on a Pixel 7a, Android 17, Termux 0.118.3 (the only device tested): Claude Code 2.1.251, Python
 3.14.6, Node v24.18.0, 23 capabilities, 23/23 checks passing, `SECURITY AUDIT:
 PASS`, and **zero listening sockets** — unless you opt into
 [on-device ADB](#optional-on-device-adb-powerful-and-it-costs-you-something),
@@ -50,7 +50,11 @@ the Play Store builds are abandoned.
 You also need about 1 GB free, most of it Claude Code's native binary and the
 glibc runtime it needs.
 
-No root. Nothing here asks for it.
+No root, no unlocked bootloader, no vendor requirement — this is a Linux
+environment in an app sandbox. One caveat: Samsung and Xiaomi kill background
+apps far more aggressively than a Pixel, so exempt **both Termux and Termux:API**
+from battery optimisation there, or the Android bridge will time out and long
+jobs will die.
 
 ---
 
@@ -342,7 +346,8 @@ and anything under `$HOME` outside `~/android-agent`.
 | `android-*` exits 4 | the permission is not granted: `android-permissions setup` |
 | camera writes an empty file | Android blocks the camera for background apps — bring Termux to the foreground |
 | `no ~/storage` | run `termux-setup-storage` and approve the dialog |
-| Claude Code dies mid-task | doze suspended Termux: `android-wake on` first |
+| Claude Code dies mid-task | doze suspended Termux: `android-wake on` first. On Samsung/Xiaomi also exempt Termux from battery optimisation ("Sleeping apps", MIUI Autostart) |
+| background processes vanish on Android 12+ | the phantom process killer caps Termux's children. Raising the cap needs `device_config` from shell uid and resets at reboot — `android-adb enable` gets you that, or run fewer background processes |
 | clipboard test SKIPs | Android 10+ only lets the foreground app read the clipboard — bring Termux forward |
 | `android-screenshot` exits 3 | needs shell uid: `android-adb enable`, or `aa ui screenshot` from a computer |
 | adb says "more than one device/emulator" | a phone on its own adb registers twice (`127.0.0.1:PORT` and `emulator-NNNN`); the harness handles it, but your own `adb` calls need `-s` |

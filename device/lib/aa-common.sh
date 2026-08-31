@@ -103,6 +103,10 @@ AA_ADB_SERIAL=""
 aa_adb_serial() {
   [ -n "$AA_ADB_SERIAL" ] && { printf '%s' "$AA_ADB_SERIAL"; return 0; }
   aa_have adb || return 1
+  # Do not touch adb unless the owner explicitly enabled it. `adb devices` forks
+  # a server that listens on 127.0.0.1:5037, so probing for the capability would
+  # otherwise *create* a daemon — a status check must never do that.
+  [ -f "$AA_CONFIG/adb-enabled" ] || return 1
   AA_ADB_SERIAL="$(adb devices 2>/dev/null | awk '$2=="device" {print $1; exit}')"
   [ -n "$AA_ADB_SERIAL" ] || return 1
   printf '%s' "$AA_ADB_SERIAL"

@@ -169,9 +169,13 @@ if [ "$FULL" -eq 1 ]; then
   if command -v termux-clipboard-get >/dev/null 2>&1; then
     OLD="$(timeout 10 termux-clipboard-get 2>/dev/null)"
     MARK="android-agent-e2e-$$"
-    if printf '%s' "$MARK" | timeout 10 termux-clipboard-set 2>/dev/null \
-       && [ "$(timeout 10 termux-clipboard-get 2>/dev/null)" = "$MARK" ]; then
+    printf '%s' "$MARK" | timeout 10 termux-clipboard-set 2>/dev/null
+    BACK="$(timeout 10 termux-clipboard-get 2>/dev/null)"
+    if [ "$BACK" = "$MARK" ]; then
       record PASS clipboard "write/read round-trip"
+    elif [ -z "${BACK//[[:space:]]/}" ]; then
+      # Android 10+ only lets the foreground app read the clipboard.
+      record SKIP clipboard "clipboard is foreground-only on Android 10+; Termux was in the background"
     else
       record FAIL clipboard "round-trip mismatch"
     fi

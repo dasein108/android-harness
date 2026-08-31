@@ -262,14 +262,24 @@ Verified on the reference device: the phone paired with its own adb, took a
 capabilities to 26 (`screenshot`, `ui-automation`, `adb-shell`). `android-adb
 disable` returned it to 23, one loopback listener, and `SECURITY AUDIT: PASS`.
 
-**Still unverified:** the pairing-code handshake itself. Testing used
-`adb tcpip` from an already-authorised USB host, which exercises everything
-downstream of pairing but not the `adb pair` step or the mDNS port discovery.
-If that part misbehaves, the fallback is the same screen it tells you to open —
-Wireless debugging shows both ports directly.
+The pairing handshake itself is verified too: `Successfully paired to
+127.0.0.1:44583`, then connected, then a screenshot the phone took of itself.
 
-One quirk worth knowing: a phone connected to its own adb registers **twice**,
-as `127.0.0.1:PORT` and `emulator-NNNN`, so a bare `adb shell` fails with "more
+Two things about the pairing that the flow tells you, and which are easy to get
+wrong:
+
+* **The two ports are different, and on different screens.** The pairing port is
+  in the "Pair device with pairing code" dialog next to the code; the connect
+  port is on the Wireless debugging screen behind it. Both change every time you
+  toggle Wireless debugging.
+* **The code expires in about a minute.** Have the dialog open before you start.
+
+Termux's adb has no mDNS support — `adb mdns services` answers `unknown host
+service` — so it cannot discover those ports for you the way desktop adb can.
+The command detects that and asks, rather than pretending to look.
+
+One more quirk: a phone connected to its own adb registers **twice**, as
+`127.0.0.1:PORT` and `emulator-NNNN`, so a bare `adb shell` fails with "more
 than one device/emulator". The harness resolves the authorised transport itself;
 your own `adb` calls will need `-s`.
 

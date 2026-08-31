@@ -552,7 +552,7 @@ main() {
                dev_ssh "bash '$AA_HOME/.android-harness-src/uninstall.sh' ${*:-}" ;;
     server)    cmd_server "$@" ;;
     ui)        cmd_ui "$@" ;;
-    permissions|perms) cmd_permissions "$@" ;;
+    permissions) cmd_permissions "$@" ;;
     policy)    cmd_policy "$@" ;;
     settings)  cmd_settings "$@" ;;
     report)    cmd_report "$@" ;;   # exits non-zero if any section failed

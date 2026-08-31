@@ -156,7 +156,12 @@ Verified on the reference device: the phone paired with its own adb, took a
 2400x1080 screenshot of itself, drove its own UI, and the manifest grew from 23
 capabilities to 26. Disabling returned it to 23 and the audit to PASS.
 
-Two things to know if you use it:
+Pairing is a guided, manual handshake by necessity: Termux's adb build has no
+mDNS support (`adb mdns services` answers `unknown host service`), so it cannot
+discover the randomised ports the way desktop adb does. `android-adb enable`
+asks for them and tells you which screen each one is on.
+
+Three things to know if you use it:
 
 * **It appears twice.** A phone connected to its own adb shows as both
   `127.0.0.1:PORT` and `emulator-NNNN`, so a bare `adb shell` fails with "more
@@ -165,6 +170,10 @@ Two things to know if you use it:
 * **Wireless debugging binds to Wi-Fi, not loopback.** `android-adb disable`
   drops the connection but deliberately cannot close that port — only you can,
   in Settings > Developer options. The audit keeps reporting it until you do.
+* **The adb server is itself a listener**, on `127.0.0.1:5037`. Nothing in the
+  harness starts it unless you have enabled on-device adb: capability probes are
+  gated on that, because `adb devices` silently forks a server and a status
+  check must not create a service. `pkill -x adb` stops a stray one.
 
 ## 4. A separate app — stronger on-device control, with a caveat
 

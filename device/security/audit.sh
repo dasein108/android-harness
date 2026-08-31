@@ -216,6 +216,10 @@ else
   line "  Wireless debugging: off"
 fi
 
+if [ -z "$ADB_SERIAL" ] && pgrep -x adb >/dev/null 2>&1; then
+  flag "an adb server is running (listens on 127.0.0.1:5037) although on-device adb is not enabled. Left over from an earlier session; stop it with: pkill -x adb"
+fi
+
 sec "Established network connections (device-visible)"
 if command -v ss >/dev/null 2>&1; then
   CONNS="$(ss -tnp state established 2>/dev/null | tail -n +2)"
@@ -297,8 +301,7 @@ SHARED STORAGE:
 $SHARED
 
 UI AUTOMATION:
-$(ADB_SERIAL="$(command -v adb >/dev/null 2>&1 && adb devices 2>/dev/null | awk '$2=="device" {print $1; exit}')"
-if [ -n "$ADB_SERIAL" ]; then
+$(if [ -n "$ADB_SERIAL" ]; then
     echo "ON-DEVICE, via adb paired to this phone. The agent has shell-uid power."
     echo "This is powerful and deliberate; disable with: android-adb disable"
   else

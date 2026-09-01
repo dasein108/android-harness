@@ -10,3 +10,4 @@ report.txt
 # the on-device agent's instructions. Negated here because a global gitignore
 # commonly excludes CLAUDE.md.
 !device/CLAUDE.md
+articles/

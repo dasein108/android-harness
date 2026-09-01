@@ -3,6 +3,11 @@
 Run **Claude Code** on your Android phone, with Python, Node, the camera,
 location, clipboard, notifications and shared storage wired up around it.
 
+![Installing on the phone: one command, then Claude Code running](docs/media/install.gif)
+
+*A real run on a Pixel 7a, time-lapsed: full reset, `curl`, `bash install.sh`,
+security audit, then Claude Code at its prompt.*
+
 Install it from the phone itself. No computer, no cable, no adb.
 
 ```bash
@@ -12,7 +17,7 @@ less install.sh          # read it before running it
 bash install.sh
 ```
 
-Verified on a Pixel 7a, Android 17, Termux 0.118.3 (the only device tested): Claude Code 2.1.251, Python
+Verified on a Pixel 7a, Android 17, Termux 0.118.3 (the only device tested): Claude Code 2.1.252, Python
 3.14.6, Node v24.18.0, 23 capabilities, 23/23 checks passing, `SECURITY AUDIT:
 PASS`, and **zero listening sockets** — unless you opt into
 [on-device ADB](#optional-on-device-adb-powerful-and-it-costs-you-something),
@@ -174,6 +179,8 @@ silent:
 ---
 
 ## Permissions
+
+![Granting a permission from the phone](docs/media/permissions.gif)
 
 ```bash
 android-permissions              # the groups and what each unlocks
